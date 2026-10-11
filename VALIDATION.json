@@ -1,0 +1,112 @@
+{
+  "date": "2026-10-06",
+  "checks": [
+    {
+      "command": "pnpm run typecheck",
+      "exit_code": 0
+    },
+    {
+      "command": "pnpm test",
+      "exit_code": 0
+    },
+    {
+      "command": "pnpm run test:ui",
+      "exit_code": 0
+    },
+    {
+      "command": "pnpm build",
+      "exit_code": 0
+    },
+    {
+      "command": "pnpm audit --json",
+      "exit_code": 0
+    },
+    {
+      "command": "Build with a non-live privileged Supabase fixture",
+      "exit_code": 1,
+      "expected_exit_code": 1,
+      "result": "Rejected before bundling"
+    }
+  ],
+  "tests_passed": 57,
+  "dependency_audit": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0
+    },
+    "dependencies": 58,
+    "devDependencies": 146,
+    "optionalDependencies": 58,
+    "totalDependencies": 204,
+    "note": "Fresh full audit completed on 6 October 2026, including development dependencies; zero reported advisories."
+  },
+  "browser_qa": "unavailable",
+  "live_database_migrations": "not_applied",
+  "live_payments": "not_tested",
+  "ui_tests_passed": 40,
+  "security_tests_passed": 10,
+  "brand": {
+    "poster_paper": "300 GSM",
+    "whatsapp_number": "+91 75986 47185",
+    "colors": [
+      "yellow",
+      "purple",
+      "pink"
+    ]
+  },
+  "new_ui_features": [
+    "Wall-colour hero with four brand presets and a custom colour picker",
+    "Visible online payment with accurate availability feedback",
+    "Linear review strip with pause and reduced-motion support",
+    "Photo-review gallery, local preview, consent and admin approval workflow",
+    "Accurate WhatsApp/Instagram order messages, receipt line totals, reference, clipboard fallback and editing",
+    "Razorpay labels, SDK load recovery, checked checkout proof, test receipts and provider focus",
+    "Separate customer and role-protected admin login with a read-only sample preview",
+    "Borderless poster artwork throughout the storefront, with visible focus/selection indicators",
+    "Original Poster Pairs: eight tiles, four matching pairs, move count and restart",
+    "Independent review motion pause states",
+    "Malformed cached/remote data recovery and accurate empty catalogs",
+    "Custom WhatsApp/Instagram handoffs, phone validation, raster checks, correct DPI and upload reset",
+    "Build-time rejection of private browser API keys",
+    "Customer photo links renewed before expiry and after returning to a hidden tab",
+    "Product gallery state resets between posters with different image counts",
+    "Full shop studio with published content, tags, bulk poster actions, categories, manual offers, settings and safe CSV exports"
+  ],
+  "live_accounts": "not_configured_or_tested",
+  "live_review_storage": "not_configured_or_tested",
+  "live_razorpay": "not_configured_or_tested",
+  "readiness_tests_passed": 4,
+  "production_ready": false,
+  "production_blockers": [
+    "No Supabase public connection variables configured on the Site; Auth, migrations and storage are not live-verified",
+    "Razorpay merchant secrets, deployed functions, webhooks and actual test transactions are not configured/verified",
+    "Rendered browser QA is unavailable and remains required before commercial launch"
+  ],
+  "audience": "public; unchanged",
+  "game_update_checks": [
+    "Four-pair completion and accurate move counting",
+    "Mismatch recovery and selection lock",
+    "Restart, hide/reopen and keyboard activation"
+  ],
+  "game_tests_passed": 0,
+  "admin_auth_tests_passed": 1,
+  "admin_backend": "not_configured; migration/RLS live checks not run",
+  "admin_ui_checks": [
+    "Role and cached-flag denial",
+    "Read-only preview navigation and disabled mutations",
+    "Failed poster save retains edits; private draft does not enter public cache",
+    "Legal fulfilment transition and failed note preservation",
+    "Review approval failure and recovery",
+    "Full poster tags/gallery/badge/orientation/per-size price editing",
+    "Global tag apply/rename/remove",
+    "Bulk poster save failure/drafts/deletion with preserved orders",
+    "Content publication failure and public hero/footer/FAQ updates",
+    "Category, manual offer and contact publication",
+    "Ten read-only sections and poster editor preview",
+    "Whitelisted settings normalization and intentional empty FAQ/hero fallback"
+  ],
+  "admin_control_tests_passed": 2
+}

@@ -1,0 +1,4 @@
+# Store this small static site and its assets as ordinary Git blobs.
+* text=auto
+*.png -filter -diff -merge -text
+*.webp -filter -diff -merge -text

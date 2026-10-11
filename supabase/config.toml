@@ -1,0 +1,11 @@
+# Functions validate bearer tokens through getUser. Checkout requires an authenticated
+# anonymous Supabase user or signed-in customer, not merely the public anon key.
+[functions.create-razorpay-order]
+verify_jwt = false
+[functions.verify-razorpay-payment]
+verify_jwt = false
+[functions.admin-orders]
+verify_jwt = false
+# The webhook is verified with the raw-body HMAC; it does not use browser auth.
+[functions.razorpay-webhook]
+verify_jwt = false

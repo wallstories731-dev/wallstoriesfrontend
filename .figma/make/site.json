@@ -1,0 +1,11 @@
+{
+  "description": "Explore playful art prints, try your wall colors, find a surprise favorite, and build your selection.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  },
+  "title": "Wall Stories \u2014 Good walls. Great vibes."
+}
