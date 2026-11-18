@@ -41,6 +41,12 @@ export const router = createBrowserRouter([
         }),
       },
       {
+        path: "/categories",
+        lazy: async () => ({
+          Component: (await import("./pages/CategoriesPage")).default,
+        }),
+      },
+      {
         path: "/gallery-sets",
         lazy: async () => ({
           Component: (await import("./pages/GallerySetsPage")).default,

@@ -1,42 +1,17 @@
 import { loadAdminSiteSettings, saveAdminSiteSettings } from "./publication";
 import { requireAdmin } from "./auth";
-import { getSupabase } from "./client";
+import { loadAdminPosters, syncCatalog } from "./catalog";
+import { stageImage } from "./imageStaging";
 import { normalizePosters } from "./models";
 import { validateRasterFile } from "./images";
-import { uploadImage } from "./storage";
 import { loadAdminOrders, updateAdminOrder } from "./orders";
 import { loadModerationReviews, approveReview, removeReview } from "./reviews";
-import { posters as seedPosters, type Poster } from "../data/shop";
+import type { Poster } from "../data/shop";
 
 export type AdminCatalog = { posters: Poster[]; revision: number };
 export async function loadAdminCatalog(): Promise<AdminCatalog> {
   await requireAdmin();
-  const { data, error } = await getSupabase()
-    .from("ws_posters")
-    .select("id,data")
-    .in("id", ["admin_catalog", "catalog"]);
-  if (error) throw new Error("Catalog could not be loaded. Please retry.");
-  const privateRow = data?.find((row) => row.id === "admin_catalog");
-  if (privateRow) {
-    if (
-      !Number.isSafeInteger(privateRow.data?.revision) ||
-      !Array.isArray(privateRow.data?.posters)
-    )
-      throw new Error(
-        "Catalog data needs attention. Contact your administrator.",
-      );
-    const posters = normalizePosters(privateRow.data.posters);
-    if (posters.length !== privateRow.data.posters.length)
-      throw new Error(
-        "Catalog contains invalid records. Repair them before publishing.",
-      );
-    return { posters, revision: privateRow.data.revision };
-  }
-  const published = data?.find((row) => row.id === "catalog");
-  return {
-    posters: normalizePosters(published ? published.data : seedPosters),
-    revision: 0,
-  };
+  return { posters: await loadAdminPosters(), revision: 0 };
 }
 export async function saveAdminCatalog(
   catalog: AdminCatalog,
@@ -61,25 +36,21 @@ export async function saveAdminCatalog(
     throw new Error(
       "Every poster needs a unique ID, valid image, price and sizes.",
     );
-  const { data, error } = await getSupabase().rpc("ws_save_admin_catalog", {
-    p_posters: posters,
-    p_expected_revision: catalog.revision,
-  });
-  if (error || !Number.isSafeInteger(data))
+  try {
+    await syncCatalog(posters, { prune: true });
+  } catch (e) {
     throw new Error(
-      "Catalog was not saved. Reload if another administrator edited it, and check that the admin migration is installed.",
+      e instanceof Error && e.message
+        ? e.message
+        : "Catalog was not saved. Please retry.",
     );
-  return { posters, revision: data };
+  }
+  return { posters: await loadAdminPosters(), revision: catalog.revision + 1 };
 }
+/** Images are staged locally and uploaded to the backend when the catalog is saved. */
 export async function uploadAdminImage(file: File) {
   await validateRasterFile(file);
-  const dataUrl = await new Promise<string>((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result));
-    r.onerror = () => reject(new Error("Image could not be read."));
-    r.readAsDataURL(file);
-  });
-  return uploadImage(dataUrl);
+  return stageImage(file);
 }
 export const adminApi = {
   loadSettings: loadAdminSiteSettings,

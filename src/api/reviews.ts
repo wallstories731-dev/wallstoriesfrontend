@@ -1,8 +1,6 @@
-import { getSupabase, supabase } from "./client"
-import { currentMember } from "./customerAuth"
-import { requireAdmin } from "./auth"
+import { getBackendClient } from "./backendClient"
 import { validateRasterFile } from "./images"
-export const REVIEW_BUCKET = "review-photos"
+import { requireAdmin } from "./auth"
 export type PhotoReview = {
   id: string
   name: string
@@ -34,144 +32,163 @@ export function validateReview(input: ReviewInput) {
 }
 export const validateReviewPhoto = validateRasterFile
 
-async function mapRows(
-  rows: Record<string, unknown>[],
-): Promise<PhotoReview[]> {
-  const client = getSupabase()
-  return Promise.all(
-    rows.map(async (r) => {
-      const { data } = await client.storage
-        .from(REVIEW_BUCKET)
-        .createSignedUrl(String(r.photo_path), 3600)
-      return {
-        id: String(r.id),
-        name: String(r.display_name),
-        city: String(r.city || ""),
-        rating: Number(r.rating),
-        text: String(r.body),
-        photo: data?.signedUrl || "",
-        approved: !!r.approved,
-      }
-    }),
-  )
-}
-export async function loadPhotoReviews(): Promise<PhotoReview[]> {
-  if (!supabase) return []
-  const { data, error } = await supabase
-    .from("ws_reviews")
-    .select("id,display_name,city,rating,body,photo_path,approved")
-    .eq("approved", true)
-    .order("created_at", { ascending: false })
-    .limit(20)
-  if (error)
-    throw new Error(
-      "Customer photos could not be loaded. Please try again later.",
-    )
-  return mapRows(data || [])
+/**
+ * Reviews live in the backend (/api/review): rating + comment per product,
+ * plus an optional wall photo stored via the shared image repository
+ * (R2/MinIO) and surfaced as `photoUrl` on every row. The photo-review
+ * gallery and admin moderation view both read from that single source.
+ */
+export type BackendReview = {
+  reviewId: string
+  productId: string
+  rating: number
+  comment: string | null
+  userEmail?: string
+  productName?: string
+  photoUrl?: string | null
+  city?: string | null
+  createdAt?: string | number | null
 }
 
-/** Renew one-hour photo links before expiry and after returning to a hidden tab. */
+export async function loadFeaturedReviews(limit = 12): Promise<BackendReview[]> {
+  const res = await getBackendClient().request<{ reviews: BackendReview[] }>(
+    `/api/review?featured=true&limit=${limit}`,
+  )
+  if (!res.success) throw new Error("Reviews could not be loaded. Please try again later.")
+  return res.data?.reviews ?? []
+}
+
+/** Text-only product review (used from the product detail page). */
+export async function submitProductReview(productId: string, rating: number, comment: string) {
+  const res = await getBackendClient().request("/api/review", {
+    method: "POST",
+    body: JSON.stringify({ productId, rating, comment: comment.trim() }),
+  })
+  if (!res.success) throw new Error(res.message || "Your review could not be submitted.")
+}
+
+/**
+ * Per-product review feed used by the product detail page.
+ * Returns the backend rows alongside the aggregate `summary` (average + count)
+ * that `/api/review?productId=` already emits, so the page can render both
+ * the rating badge and the list from a single round-trip.
+ */
+export type ProductReviewFeed = {
+  reviews: BackendReview[]
+  summary: { avgRating: number; totalReviews: number } | null
+}
+
+export async function loadProductReviews(
+  productId: string,
+  limit = 20,
+): Promise<ProductReviewFeed> {
+  const res = await getBackendClient().request<{
+    reviews: BackendReview[]
+    summary?: { avgRating: number; totalReviews: number } | null
+  }>(`/api/review?productId=${encodeURIComponent(productId)}&limit=${limit}`)
+  if (!res.success) throw new Error(res.message || "Reviews could not be loaded.")
+  return {
+    reviews: res.data?.reviews ?? [],
+    summary: res.data?.summary ?? null,
+  }
+}
+
+/** Pretty display name — prefers "Name" over "foo@bar.com". */
+function displayName(review: BackendReview): string {
+  const email = (review.userEmail || "").trim()
+  if (!email) return "Customer"
+  const at = email.indexOf("@")
+  return at > 0 ? email.slice(0, at) : email
+}
+
+function toPhotoReview(row: BackendReview): PhotoReview {
+  return {
+    id: row.reviewId,
+    name: displayName(row),
+    city: row.city || row.productName || "",
+    rating: row.rating,
+    text: row.comment || "",
+    photo: row.photoUrl || "",
+    approved: true,
+  }
+}
+
+export async function loadPhotoReviews(limit = 24): Promise<PhotoReview[]> {
+  const res = await getBackendClient().request<{ reviews: BackendReview[] }>(
+    `/api/review?photos=true&limit=${limit}`,
+  )
+  if (!res.success) throw new Error(res.message || "Customer photos could not be loaded.")
+  // Defensive filter: backend promises photo_url is present, but drop
+  // anything unexpected so the gallery never renders a broken tile.
+  return (res.data?.reviews ?? []).filter((r) => !!r.photoUrl).map(toPhotoReview)
+}
+
 export function subscribePhotoReviews(
   onRows: (rows: PhotoReview[]) => void,
-  onError: (error: Error) => void,
+  _onError: (error: Error) => void,
   load: () => Promise<PhotoReview[]> = loadPhotoReviews,
 ) {
-  if (!supabase && load === loadPhotoReviews) {
-    onRows([])
-    return () => {}
-  }
-  let active = true, busy = false
-  async function refresh() {
-    if (!active || busy || document.hidden) return
-    busy = true
-    try {
-      const rows = await load()
-      if (active) onRows(rows)
-    } catch (error) {
-      if (active) onError(error instanceof Error ? error : new Error("Customer photos could not be loaded. Please try again later."))
-    } finally {
-      busy = false
-    }
-  }
-  const onVisibility = () => { if (!document.hidden) void refresh() }
-  void refresh()
-  const timer = setInterval(() => { void refresh() }, 45 * 60 * 1000)
-  document.addEventListener("visibilitychange", onVisibility)
+  let active = true
+  load()
+    .then((rows) => active && onRows(rows))
+    .catch((e) => active && _onError(e instanceof Error ? e : new Error("Customer photos could not be loaded.")))
   return () => {
     active = false
-    clearInterval(timer)
-    document.removeEventListener("visibilitychange", onVisibility)
   }
 }
 
-export async function submitPhotoReview(input: ReviewInput, file: File) {
+/**
+ * The "Share your wall" form submits text + photo as a single multipart
+ * POST. The customer picks a product-less testimonial, so `productId`
+ * comes from an attribute on the review input (the storefront passes a
+ * site-wide fallback — e.g. the first catalog product). If a product
+ * isn't available we throw rather than send a half-formed review.
+ */
+export async function submitPhotoReview(
+  input: ReviewInput & { productId?: string },
+  file: File,
+) {
   validateReview(input)
   await validateReviewPhoto(file)
-  const member = await currentMember()
-  if (!member) throw new Error("Sign in to submit your review.")
-  const client = getSupabase(),
-    extension =
-      file.type === "image/jpeg"
-        ? "jpg"
-        : file.type === "image/png"
-          ? "png"
-          : "webp"
-  const path = member.id + "/" + crypto.randomUUID() + "." + extension
-  const { error: uploadError } = await client.storage
-    .from(REVIEW_BUCKET)
-    .upload(path, file, { contentType: file.type, upsert: false })
-  if (uploadError) throw new Error("Photo upload failed. Please try again.")
-  const { error } = await client
-    .from("ws_reviews")
-    .insert({
-      user_id: member.id,
-      display_name: input.name.trim(),
-      city: input.city.trim(),
-      rating: input.rating,
-      body: input.text.trim(),
-      photo_path: path,
-    })
-  if (error) {
-    await client.storage.from(REVIEW_BUCKET).remove([path])
-    throw new Error(
-      "Your review could not be submitted. Please try later; up to three reviews per day are allowed.",
-    )
+  if (!input.productId) {
+    throw new Error("Choose a poster to pair with your photo review.")
   }
+  const form = new FormData()
+  form.append("productId", input.productId)
+  form.append("rating", String(input.rating))
+  form.append("comment", input.text.trim())
+  if (input.city.trim()) form.append("city", input.city.trim())
+  form.append("photo", file, file.name)
+  // The client auto-skips Content-Type for FormData so the browser can
+  // set the correct multipart boundary.
+  const res = await getBackendClient().request<BackendReview>("/api/review", { method: "POST", body: form })
+  if (!res.success) throw new Error(res.message || "Your review could not be submitted.")
+  if (!res.data?.reviewId || !res.data.photoUrl)
+    throw new Error("The server did not return the saved photo review. Please reload before retrying.")
+  return toPhotoReview(res.data)
 }
-export async function loadModerationReviews() {
+export async function loadModerationReviews(): Promise<PhotoReview[]> {
   await requireAdmin()
-  const { data, error } = await getSupabase()
-    .from("ws_reviews")
-    .select("id,display_name,city,rating,body,photo_path,approved")
-    .order("created_at", { ascending: false })
-    .limit(50)
-  if (error) throw new Error("Review moderation is unavailable.")
-  return mapRows(data || [])
+  const res = await getBackendClient().request<{ reviews: BackendReview[] }>(
+    "/api/review?all=true&limit=200",
+  )
+  if (!res.success) throw new Error(res.message || "Reviews could not be loaded.")
+  return (res.data?.reviews ?? []).map((r) => ({
+    id: r.reviewId,
+    name: displayName(r),
+    // Prefer the city the customer typed; fall back to the product name
+    // so the admin can still tell what poster the review is for.
+    city: r.city || r.productName || "",
+    rating: r.rating,
+    text: r.comment || "",
+    photo: r.photoUrl || "",
+    approved: true,
+  }))
 }
-export async function approveReview(id: string) {
-  await requireAdmin()
-  const { error } = await getSupabase()
-    .from("ws_reviews")
-    .update({ approved: true })
-    .eq("id", id)
-  if (error) throw new Error("Review approval failed.")
-}
+// Backend reviews are published on submit, so there is nothing to approve.
+export async function approveReview(_id: string) {}
 export async function removeReview(id: string) {
   await requireAdmin()
-  const client = getSupabase()
-  const { data, error: lookup } = await client
-    .from("ws_reviews")
-    .select("photo_path")
-    .eq("id", id)
-    .single()
-  if (lookup) throw new Error("Review could not be found.")
-  const { error: photoError } = await client.storage
-    .from(REVIEW_BUCKET)
-    .remove([data.photo_path])
-  if (photoError) throw new Error("Review photo removal failed. Please retry.")
-  const { error } = await client.from("ws_reviews").delete().eq("id", id)
-  if (error)
-    throw new Error(
-      "The photo was removed but the review could not be removed. Please retry.",
-    )
+  const res = await getBackendClient().request(`/api/review?reviewId=${encodeURIComponent(id)}`, { method: "DELETE" })
+  if (!res.success) throw new Error(res.message || "Review could not be removed.")
 }

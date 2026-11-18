@@ -1,7 +1,17 @@
 import { useEffect } from 'react'
-import { useLocation } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
+import { LOGIN_REQUIRED_EVENT } from '../context/StoreContext'
 export default function RouteEffects() {
-  const {pathname,hash}=useLocation()
+  const {pathname,hash,search}=useLocation()
+  const navigate=useNavigate()
+  useEffect(()=>{
+    const toLogin=()=>{
+      if(pathname==='/account')return
+      navigate(`/account?returnTo=${encodeURIComponent(pathname+search+hash)}`)
+    }
+    window.addEventListener(LOGIN_REQUIRED_EVENT,toLogin)
+    return()=>window.removeEventListener(LOGIN_REQUIRED_EVENT,toLogin)
+  },[pathname,search,hash,navigate])
   useEffect(()=>{
     const label=pathname==='/'?'Good walls. Great vibes.':pathname.startsWith('/print/')?'Art print':pathname.split('/').filter(Boolean).at(-1)?.replaceAll('-',' ')||'Shop'
     document.title=`Wall Stories — ${label}`

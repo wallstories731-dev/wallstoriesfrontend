@@ -647,6 +647,26 @@ export default function AdminConfiguration({
                         </div>
                       );
                     })}
+                  {[...new Set(catalog.posters.map((p) => p.category).filter(Boolean))]
+                    .filter((c) => !form.categories.includes(c))
+                    .map((name) => (
+                      <div key={"unlisted-" + name}>
+                        <b>{name}</b>
+                        <small>
+                          Used by{" "}
+                          {catalog.posters.filter((p) => p.category === name).length}{" "}
+                          posters but not in the category list
+                        </small>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setForm({ ...form, categories: [...form.categories, name] })
+                          }
+                        >
+                          Add to list ＋
+                        </button>
+                      </div>
+                    ))}
                 </div>
               </section>
             )}

@@ -2,15 +2,16 @@ import useModal from "../hooks/useModal";
 import CartPanel from "./CartPanel";
 import Logo from "./Logo";
 import ArtworkImage from "./ArtworkImage";
-import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
+import { useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router";
 import { useCustomerAuth } from "../context/CustomerAuthContext";
-import { useStore } from "../context/StoreContext";
+import { useStore, LOGIN_REQUIRED_EVENT } from "../context/StoreContext";
 import { CloseIcon, HeartIcon, SearchIcon, MenuIcon, CartIcon } from "./icons";
 import { formatMoney, priceFor } from "../data/shop";
 
 const NAV_LINKS = [
   { label: "Shop", href: "/#catalogue" },
+  { label: "Categories", href: "/categories" },
   { label: "Help", href: "/help" },
   { label: "Track Order", href: "/track" },
   { label: "Gallery Sets", href: "/gallery-sets" },
@@ -23,27 +24,29 @@ type Props = {
   cartCount: number;
   bumped: boolean;
   onOpenCart: () => void;
-  query: string;
-  onQueryChange: (q: string) => void;
-  SearchSlot: React.ReactNode;
-  CartSlot: React.ReactNode;
   mobileOpen?: boolean;
   onMobileOpenChange?: (open: boolean) => void;
 };
 
+/**
+ * Site-wide navigation shell. The only product-search entry point on the
+ * storefront is the sticky header search on the home page (right next to the
+ * logo). From any secondary page we surface a lightweight "Search prints" button
+ * here that always routes the visitor to `/#catalogue`, where the real search
+ * input lives — so clicking search anywhere on the site lands them on the
+ * products section and renders results there.
+ */
 export default function SiteNav({
   cartCount,
   bumped,
   onOpenCart,
-  query,
-  onQueryChange,
-  SearchSlot,
-  CartSlot,
   mobileOpen,
   onMobileOpenChange,
 }: Props) {
   const { member } = useCustomerAuth();
   const { wishlist, toggleWishlist, posters } = useStore();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [internalDrawerOpen, setInternalDrawerOpen] = useState(false);
   const drawerOpen = mobileOpen ?? internalDrawerOpen;
   const setDrawerOpen = (v: boolean) => {
@@ -51,54 +54,44 @@ export default function SiteNav({
     else setInternalDrawerOpen(v);
   };
   const [wishlistOpen, setWishlistOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [localQuery, setLocalQuery] = useState("");
   const drawerRef = useModal(drawerOpen, () => setDrawerOpen(false));
   const wishlistRef = useModal<HTMLElement>(wishlistOpen, () =>
     setWishlistOpen(false),
   );
   const [cartOpen, setCartOpen] = useState(false);
   const [notice, setNotice] = useState("");
+  const openWishlist = () => {
+    if (!member) return window.dispatchEvent(new Event(LOGIN_REQUIRED_EVENT));
+    setWishlistOpen(true);
+  };
   const openCart = () => {
+    if (!member) return window.dispatchEvent(new Event(LOGIN_REQUIRED_EVENT));
     if (mobileOpen !== undefined) onOpenCart();
     else setCartOpen(true);
   };
-  useEffect(() => {
-    setLocalQuery(query);
-  }, [query]);
-  const searchRef = useRef<HTMLDivElement>(null);
+  const goToCatalogSearch = () => {
+    // Always drop the visitor into the real catalogue search bar — scroll on
+    // the home page, otherwise navigate there with #catalogue so HomePage's
+    // hash-scroll handler brings them to the grid on arrival.
+    if (location.pathname === "/") {
+      const el = document.getElementById("catalogue");
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+      // Focus the search input once the scroll begins so typing starts
+      // immediately without an extra click.
+      setTimeout(() => {
+        const input = document.querySelector<HTMLInputElement>(
+          'input[aria-label="Search posters"]',
+        );
+        input?.focus();
+      }, 180);
+    } else {
+      navigate("/#catalogue");
+    }
+  };
 
   const wishlistCount = posters.filter(
     (p) => p.status !== "draft" && wishlist.includes(p.id),
   ).length;
-
-  // Compute search results from local query
-  const searchResults =
-    localQuery.trim().length >= 2
-      ? posters
-          .filter((p) => {
-            const q = localQuery.trim().toLowerCase();
-            return (
-              p.status !== "draft" &&
-              (p.title + " " + p.code + " " + (p.tags || []).join(" "))
-                .toLowerCase()
-                .includes(q)
-            );
-          })
-          .slice(0, 5)
-      : [];
-
-  // Close search dropdown on outside click
-  useEffect(() => {
-    if (!searchOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setSearchOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [searchOpen]);
 
   // Wishlist posters
   const wishlisted = posters.filter(
@@ -153,88 +146,20 @@ export default function SiteNav({
         <div className="mx-auto flex max-w-[1240px] items-center gap-6 px-8 py-2.5">
           {/* Primary nav links */}
           <NavLink label="Shop" href="/#catalogue" />
+          <NavLink label="Categories" href="/categories" />
           <NavLink label="Help" href="/help" />
           <NavLink label="Gallery Sets" href="/gallery-sets" />
           <NavLink label="Custom Poster" href="/custom-poster" />
           <NavLink label="About" href="/about" />
 
           <div className="ml-auto flex items-center gap-2">
-            {/* Inline search */}
-            <div ref={searchRef} className="relative">
-              <div className="flex items-center gap-1.5 rounded-full border border-[var(--color-hairline)] bg-[var(--color-ground-soft)] px-3 py-1.5 transition focus-within:border-[var(--color-magenta)]">
-                <SearchIcon className="h-3.5 w-3.5 shrink-0 text-[var(--color-ink-soft)]" />
-                <input
-                  value={localQuery}
-                  onChange={(e) => {
-                    setLocalQuery(e.target.value);
-                    onQueryChange(e.target.value);
-                    setSearchOpen(true);
-                  }}
-                  onFocus={() => setSearchOpen(true)}
-                  placeholder="Search prints…"
-                  aria-label="Search posters"
-                  className="w-36 bg-transparent text-[13px] text-[var(--color-ink)] placeholder:text-[var(--color-ink-soft)]/60 focus:outline-none"
-                />
-                {localQuery && (
-                  <button
-                    type="button"
-                    aria-label="Clear search"
-                    onClick={() => {
-                      setLocalQuery("");
-                      onQueryChange("");
-                      setSearchOpen(false);
-                    }}
-                  >
-                    <CloseIcon className="h-3.5 w-3.5 text-[var(--color-ink-soft)]" />
-                  </button>
-                )}
-              </div>
-
-              {/* Search results dropdown */}
-              {searchOpen && searchResults.length > 0 && (
-                <div className="animate-rise absolute right-0 top-full z-50 mt-2 w-72 overflow-hidden rounded-[14px] border border-[var(--color-hairline)] bg-[var(--color-ground)] shadow-[0_16px_48px_-20px_rgba(8,2,14,0.4)]">
-                  {searchResults.map((p) => (
-                    <Link
-                      key={p.id}
-                      to={`/print/${p.id}`}
-                      onClick={() => {
-                        setSearchOpen(false);
-                        setLocalQuery("");
-                        onQueryChange("");
-                      }}
-                      className="flex w-full items-center gap-3 px-4 py-3 text-left transition hover:bg-[var(--color-ground-soft)]"
-                    >
-                      <ArtworkImage
-                        src={p.image}
-                        alt={p.alt}
-                        className="poster-frame poster-frame-mini h-11 w-8 shrink-0 rounded-[4px] object-cover shadow-sm"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-[13px] font-medium text-[var(--color-ink)]">
-                          {p.title}
-                        </p>
-                        <p className="text-[11px] text-[var(--color-magenta)]">
-                          {p.code} · {formatMoney(priceFor(p, p.sizes[0]))}
-                        </p>
-                      </div>
-                    </Link>
-                  ))}
-                </div>
-              )}
-              {searchOpen &&
-                localQuery.trim().length >= 2 &&
-                searchResults.length === 0 && (
-                  <div className="animate-rise absolute right-0 top-full z-50 mt-2 w-64 rounded-[14px] border border-[var(--color-hairline)] bg-[var(--color-ground)] px-5 py-4 text-[13px] text-[var(--color-ink-soft)] shadow-[0_16px_48px_-20px_rgba(8,2,14,0.4)]">
-                    No results for "{localQuery.trim()}"
-                  </div>
-                )}
-            </div>
+  
 
             <button
               type="button"
               onClick={openCart}
               aria-label={`Open selection, ${cartCount} items`}
-              className="nav-cart-button"
+              className={`nav-cart-button ${bumped ? "animate-pop" : ""}`}
             >
               <CartIcon className="h-5 w-5" />
               <span>{cartCount}</span>
@@ -246,7 +171,7 @@ export default function SiteNav({
             <button
               type="button"
               aria-label={`Wishlist, ${wishlistCount} items`}
-              onClick={() => setWishlistOpen(true)}
+              onClick={() => openWishlist()}
               className="relative flex h-9 w-9 items-center justify-center rounded-full text-[var(--color-ink-soft)] transition hover:bg-[var(--color-ground-soft)] hover:text-[var(--color-magenta)]"
             >
               <HeartIcon className="h-5 w-5" filled={wishlistCount > 0} />
@@ -290,6 +215,18 @@ export default function SiteNav({
             </div>
 
             <nav className="flex flex-1 flex-col overflow-y-auto py-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setDrawerOpen(false);
+                  goToCatalogSearch();
+                }}
+                className="flex min-h-[52px] items-center gap-3 px-5 text-[16px] font-medium text-[var(--color-ink)] transition hover:bg-[var(--color-ground-soft)] hover:text-[var(--color-magenta)] focus-visible:outline-none"
+              >
+                <SearchIcon className="h-5 w-5" />
+                Search prints
+              </button>
+
               {NAV_LINKS.map((l) =>
                 l.href.startsWith("/") && !l.href.startsWith("/#") ? (
                   <Link
@@ -317,7 +254,7 @@ export default function SiteNav({
                   type="button"
                   onClick={() => {
                     setDrawerOpen(false);
-                    setWishlistOpen(true);
+                    openWishlist();
                   }}
                   className="flex min-h-[52px] w-full items-center gap-3 px-0 text-[16px] font-medium text-[var(--color-ink)] transition hover:text-[var(--color-magenta)]"
                 >

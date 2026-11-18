@@ -5,9 +5,12 @@ import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router";
 import { adminApi, type AdminApi, type AdminCatalog } from "../../api/admin";
 import type { PhotoReview } from "../../api/reviews";
+import { releaseStagedImage, stagedImagePreview } from "../../api/imageStaging";
 import {
   posters as seedPosters,
   formatMoney,
+  priceFor,
+  SIZE_KEYS,
   type Poster,
   type SizeKey,
 } from "../../data/shop";
@@ -1220,22 +1223,24 @@ function PosterEditor({
   onClose: () => void;
   onSave: (p: Poster) => Promise<void>;
 }) {
-  const { categories } = useStore();
+  const { categories, posters: shopPosters } = useStore();
   const alive = useRef(true);
+  const uploads = useRef<string[]>([]);
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
+      uploads.current.forEach(releaseStagedImage);
     };
   }, []);
-  const [form, setForm] = useState<Poster>(() =>
-    poster
+  const [form, setForm] = useState<Poster>(() => {
+    const base: Poster = poster
       ? { ...poster, sizes: [...poster.sizes] }
       : {
           id: "poster-" + crypto.randomUUID(),
           code: "",
           title: "",
-          category: categories.find((c) => c !== "All") || "Abstract",
+          category: categories.find((c) => c !== "All") || "",
           basePrice: 499,
           sizes: ["A4"],
           image: "",
@@ -1243,21 +1248,92 @@ function PosterEditor({
           description: "",
           added: Date.now(),
           status: "draft",
-        },
-  );
+        };
+    const customPrices = { ...base.customPrices };
+    for (const size of base.sizes)
+      if (!customPrices[size]) {
+        const price = priceFor(base, size);
+        customPrices[size] = { price, mrp: price };
+      }
+    return { ...base, customPrices };
+  });
   const [tagsInput, setTagsInput] = useState("");
   const [error, setError] = useState(""),
-    [uploading, setUploading] = useState(false);
-  const disabled = busy || uploading;
+    [uploading, setUploading] = useState(false),
+    [galleryUploadingIdx, setGalleryUploadingIdx] = useState<number | null>(
+      null,
+    );
+  const galleryFileRef = useRef<HTMLInputElement | null>(null);
+  const galleryTarget = useRef<number | null>(null);
+  const disabled = busy || uploading || galleryUploadingIdx !== null;
   const ref = useModal(true, () => {
     if (!disabled) onClose();
   });
+  const carousel = form.carouselImages || [];
+  const removeGalleryImage = (i: number) =>
+    setForm((f) => ({
+      ...f,
+      carouselImages: (f.carouselImages || []).filter((_, j) => j !== i),
+    }));
+  // i === null appends a new gallery image; otherwise replaces slot i.
+  const uploadGalleryFile = async (file: File, i: number | null) => {
+    setUploading(true);
+    setError("");
+    setGalleryUploadingIdx(i ?? carousel.length);
+    try {
+      const url = await upload(file);
+      if (alive.current) {
+        uploads.current.push(url);
+        setForm((f) => ({
+          ...f,
+          carouselImages:
+            i === null
+              ? [...(f.carouselImages || []), url]
+              : (f.carouselImages || []).map((v, j) => (j === i ? url : v)),
+        }));
+      } else releaseStagedImage(url);
+    } catch (e) {
+      if (alive.current)
+        setError(e instanceof Error ? e.message : "Upload failed.");
+    } finally {
+      if (alive.current) {
+        setUploading(false);
+        setGalleryUploadingIdx(null);
+      }
+    }
+  };
+  const openGalleryPicker = (i: number | null) => {
+    if (i === null && carousel.length >= 6) return;
+    galleryTarget.current = i;
+    galleryFileRef.current?.click();
+  };
+  const onGalleryFileChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    void uploadGalleryFile(file, galleryTarget.current);
+    galleryTarget.current = null;
+  };
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (readOnly) return;
     setError("");
     if (!form.sizes.length) {
       setError("Choose at least one print size.");
+      return;
+    }
+    if (!form.category.trim()) {
+      setError("Choose a category. Add one under Categories first if none exist.");
+      return;
+    }
+    if (!form.image) {
+      setError("Upload the artwork image.");
+      return;
+    }
+    if (form.sizes.some((size) => (form.customPrices?.[size]?.price ?? 0) <= 0)) {
+      setError("Enter a selling price for every selected size.");
       return;
     }
     if (tagsInput.trim()) {
@@ -1277,10 +1353,11 @@ function PosterEditor({
     try {
       await onSave({
         ...form,
+        basePrice: form.customPrices?.[form.sizes[0]]?.price ?? form.basePrice,
         title: form.title.trim(),
         code: form.code.trim(),
         category: form.category.trim(),
-        alt: form.alt.trim() || form.title.trim(),
+        alt: form.title.trim(),
       });
     } catch (e) {
       if (alive.current)
@@ -1340,11 +1417,13 @@ function PosterEditor({
                 onChange={(e) => setForm({ ...form, category: e.target.value })}
                 disabled={disabled}
               >
+                {!form.category && <option value="">Select a category</option>}
                 {[
                   ...new Set([
                     ...categories.filter((c) => c !== "All"),
+                    ...shopPosters.map((p) => p.category),
                     form.category,
-                  ]),
+                  ].filter(Boolean)),
                 ].map((c) => (
                   <option key={c} value={c}>
                     {c}
@@ -1352,62 +1431,98 @@ function PosterEditor({
                 ))}
               </select>
             </label>
-            <label>
-              Base price (₹)
-              <input
-                required
-                type="number"
-                min="1"
-                max="500000"
-                step="1"
-                value={form.basePrice}
-                onChange={(e) =>
-                  setForm({ ...form, basePrice: Number(e.target.value) })
-                }
-                disabled={disabled}
-              />
-            </label>
-            <small className="admin-caption">
-              Other sizes use the shop size multipliers. Existing per-size
-              prices stay in effect.
-            </small>
             <fieldset disabled={disabled}>
-              <legend>Available sizes</legend>
-              <div className="admin-size-options">
-                {(["A4", "A3", "A2", "12×18", "18×24"] as SizeKey[]).map(
-                  (size) => (
-                    <label key={size}>
+              <legend>Available sizes &amp; prices</legend>
+              <p className="admin-caption">
+                Each ticked size becomes a purchasable variant with its own
+                selling price. MRP must be at least the selling price.
+              </p>
+              {(SIZE_KEYS as SizeKey[]).map((size) => {
+                const on = form.sizes.includes(size);
+                const entry = form.customPrices?.[size];
+                return (
+                  <div className="admin-config-row" key={size}>
+                    <label className="admin-size-check">
                       <input
                         type="checkbox"
-                        checked={form.sizes.includes(size)}
-                        onChange={(e) =>
+                        checked={on}
+                        onChange={(e) => {
+                          const prices = { ...form.customPrices };
+                          if (e.target.checked) {
+                            const price = prices[size]?.price ?? priceFor(form, size);
+                            prices[size] = { price, mrp: Math.max(price, prices[size]?.mrp || 0) };
+                          } else delete prices[size];
                           setForm({
                             ...form,
-                            sizes: e.target.checked
-                              ? [...form.sizes, size]
-                              : form.sizes.filter((s) => s !== size),
-                          })
-                        }
+                            sizes: SIZE_KEYS.filter((s) =>
+                              s === size ? e.target.checked : form.sizes.includes(s),
+                            ),
+                            customPrices: prices,
+                          });
+                        }}
                       />
                       {size}
                     </label>
-                  ),
-                )}
-              </div>
+                    {on && (
+                      <>
+                        <label>
+                          {size + " price (₹)"}
+                          <input
+                            required
+                            type="number"
+                            min="1"
+                            max="500000"
+                            step="1"
+                            value={entry?.price ?? ""}
+                            onChange={(e) => {
+                              const price = Number(e.target.value);
+                              setForm({
+                                ...form,
+                                customPrices: {
+                                  ...form.customPrices,
+                                  [size]: { price, mrp: Math.max(price, entry?.mrp || 0) },
+                                },
+                              });
+                            }}
+                          />
+                        </label>
+                        <label>
+                          {size + " MRP (₹)"}
+                          <input
+                            type="number"
+                            min={entry?.price || 1}
+                            max="500000"
+                            step="1"
+                            value={entry?.mrp ?? ""}
+                            onChange={(e) =>
+                              setForm({
+                                ...form,
+                                customPrices: {
+                                  ...form.customPrices,
+                                  [size]: {
+                                    price: entry?.price || 0,
+                                    mrp: Number(e.target.value),
+                                  },
+                                },
+                              })
+                            }
+                          />
+                        </label>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
             </fieldset>
-            <label>
-              Artwork image URL
-              <input
-                type="url"
-                required
-                value={form.image}
-                onChange={(e) => setForm({ ...form, image: e.target.value })}
-                placeholder="https://…"
-                disabled={disabled}
+            {form.image && (
+              <ArtworkImage
+                src={stagedImagePreview(form.image)}
+                alt="Artwork image preview"
+                style={{ maxWidth: 160, maxHeight: 200, objectFit: "contain" }}
               />
-            </label>
+            )}
             <label>
-              Or upload artwork
+              Upload artwork
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
@@ -1420,7 +1535,10 @@ function PosterEditor({
                   setError("");
                   try {
                     const url = await upload(file);
-                    if (alive.current) setForm((f) => ({ ...f, image: url }));
+                    if (alive.current) {
+                      uploads.current.push(url);
+                      setForm((f) => ({ ...f, image: url }));
+                    } else releaseStagedImage(url);
                   } catch (e) {
                     if (alive.current)
                       setError(
@@ -1433,44 +1551,9 @@ function PosterEditor({
               />
             </label>
             <small className="admin-caption">
-              JPEG, PNG or WebP. Maximum 5 MB.
+              JPEG, PNG or WebP. Maximum 5 MB. Uploaded artwork is attached to
+              the product when you save.
             </small>
-            <label>
-              Poster orientation
-              <select
-                value={form.orientation || "portrait"}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    orientation: e.target.value as "portrait" | "square",
-                  })
-                }
-                disabled={disabled}
-              >
-                <option value="portrait">Portrait</option>
-                <option value="square">Square</option>
-              </select>
-            </label>
-            <label>
-              Poster badge
-              <select
-                value={form.badge || ""}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    badge: e.target.value
-                      ? (e.target.value as Poster["badge"])
-                      : undefined,
-                  })
-                }
-                disabled={disabled}
-              >
-                <option value="">No badge</option>
-                <option value="new">New</option>
-                <option value="bestseller">Bestseller</option>
-                <option value="few-left">Few left</option>
-              </select>
-            </label>
             <fieldset disabled={disabled}>
               <legend>Poster tags</legend>
               <div className="admin-tag-chips">
@@ -1523,126 +1606,55 @@ function PosterEditor({
               </div>
             </fieldset>
             <fieldset disabled={disabled}>
-              <legend>Per-size prices</legend>
+              <legend>Gallery images ({carousel.length}/6)</legend>
               <p className="admin-caption">
-                Leave blank to use the base price multiplier. MRP must be at
-                least the selling price.
+                Up to six additional images shown in the product carousel. The
+                main artwork stays first.
               </p>
-              {form.sizes.map((size) => (
-                <div className="admin-config-row" key={size}>
-                  <label>
-                    {size + " price (₹)"}
-                    <input
-                      type="number"
-                      min="1"
-                      max="500000"
-                      step="1"
-                      value={form.customPrices?.[size]?.price ?? ""}
-                      onChange={(e) => {
-                        const prices = { ...form.customPrices };
-                        if (!e.target.value) delete prices[size];
-                        else
-                          prices[size] = {
-                            price: Number(e.target.value),
-                            mrp: Math.max(
-                              Number(e.target.value),
-                              prices[size]?.mrp || 0,
-                            ),
-                          };
-                        setForm({ ...form, customPrices: prices });
-                      }}
-                    />
-                  </label>
-                  <label>
-                    {size + " MRP (₹)"}
-                    <input
-                      type="number"
-                      min={form.customPrices?.[size]?.price || 1}
-                      max="500000"
-                      step="1"
-                      disabled={!form.customPrices?.[size]}
-                      value={form.customPrices?.[size]?.mrp ?? ""}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          customPrices: {
-                            ...form.customPrices,
-                            [size]: {
-                              price:
-                                form.customPrices?.[size]?.price ||
-                                form.basePrice,
-                              mrp: Number(e.target.value),
-                            },
-                          },
-                        })
-                      }
-                    />
-                  </label>
-                </div>
-              ))}
-            </fieldset>
-            <fieldset disabled={disabled}>
-              <legend>Gallery images</legend>
-              <p className="admin-caption">
-                Up to six additional images. Use image URLs; the main artwork
-                stays first.
-              </p>
-              {(form.carouselImages || []).map((url, i) => (
+              {carousel.map((url, i) => (
                 <div className="admin-config-row" key={i}>
-                  <label>
-                    {"Gallery image " + (i + 1)}
-                    <input
-                      required
-                      type="url"
-                      value={url}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          carouselImages: form.carouselImages?.map((v, j) =>
-                            j === i ? e.target.value : v,
-                          ),
-                        })
-                      }
-                    />
-                  </label>
+                  <ArtworkImage
+                    src={stagedImagePreview(url)}
+                    alt={"Gallery image " + (i + 1)}
+                    style={{
+                      maxWidth: 120,
+                      maxHeight: 120,
+                      objectFit: "contain",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    disabled={galleryUploadingIdx !== null}
+                    onClick={() => openGalleryPicker(i)}
+                  >
+                    {galleryUploadingIdx === i ? "Uploading…" : "Replace"}
+                  </button>
                   <button
                     type="button"
                     aria-label={"Remove gallery image " + (i + 1)}
-                    onClick={() =>
-                      setForm({
-                        ...form,
-                        carouselImages: form.carouselImages?.filter(
-                          (_, j) => j !== i,
-                        ),
-                      })
-                    }
+                    onClick={() => removeGalleryImage(i)}
                   >
                     Remove
                   </button>
                 </div>
               ))}
-              <button
-                type="button"
-                disabled={(form.carouselImages || []).length >= 6}
-                onClick={() =>
-                  setForm({
-                    ...form,
-                    carouselImages: [...(form.carouselImages || []), ""],
-                  })
-                }
-              >
-                Add gallery image ＋
-              </button>
+              <div className="admin-config-row">
+                <button
+                  type="button"
+                  disabled={carousel.length >= 6 || galleryUploadingIdx !== null}
+                  onClick={() => openGalleryPicker(null)}
+                >
+                  {galleryUploadingIdx === carousel.length ? "Uploading…" : "Upload gallery image ＋"}
+                </button>
+                <input
+                  ref={galleryFileRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  hidden
+                  onChange={onGalleryFileChange}
+                />
+              </div>
             </fieldset>
-            <label>
-              Image description
-              <input
-                value={form.alt}
-                maxLength={300}
-                onChange={(e) => setForm({ ...form, alt: e.target.value })}
-                disabled={disabled}
-              />
-            </label>
             <label>
               Poster description
               <textarea

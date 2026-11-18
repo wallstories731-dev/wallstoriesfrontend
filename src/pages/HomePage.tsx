@@ -1,5 +1,6 @@
 import { useSiteContent } from "../context/SiteContentContext";
 import { useMemo, useRef, useState, useEffect } from "react";
+import { useLocation, useNavigate } from "react-router";
 import CartPanel from "../components/CartPanel";
 import PosterCard from "../components/PosterCard";
 import PosterDetail from "../components/PosterDetail";
@@ -49,9 +50,21 @@ const TRUST_CHIPS = [
 export default function HomePage() {
   const store = useStore();
   const { content } = useSiteContent();
+  const location = useLocation();
+  const navigate = useNavigate();
 
-  const [query, setQuery] = useState("");
-  const [category, setCategory] = useState<string>("All");
+  // Hydrate search state from `?q=` so visitors arriving from other pages
+  // (via the nav "Search" button → `/#catalogue?q=…`) see the pre-filtered
+  // catalogue immediately. We intentionally only read on mount — later typing
+  // flows back into the URL via syncQueryToUrl below.
+  const initialQuery = (() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("q") ?? "";
+  })();
+  const [query, setQuery] = useState(initialQuery);
+  const [category, setCategory] = useState<string>(
+    () => new URLSearchParams(location.search).get("category") || "All",
+  );
   const [sort, setSort] = useState<Sort>("newest");
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -79,6 +92,23 @@ export default function HomePage() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  const shopCategories = useMemo(() => {
+    const listed = store.categories.filter((c) => c !== "All");
+    const extra = [
+      ...new Set(
+        store.posters.filter((p) => p.status !== "draft").map((p) => p.category).filter(Boolean),
+      ),
+    ]
+      .filter((c) => !listed.includes(c))
+      .sort();
+    return ["All", ...listed, ...extra];
+  }, [store.posters, store.categories]);
+
+  useEffect(() => {
+    if (store.posters.length > 0 && category !== "All" && !shopCategories.includes(category))
+      setCategory("All");
+  }, [category, shopCategories, store.posters.length]);
+
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     const list = store.posters.filter((p) => {
@@ -91,9 +121,16 @@ export default function HomePage() {
       if (category !== "All" && p.category !== category) return false;
       if (
         q &&
-        !(p.title + " " + p.code + " " + (p.tags || []).join(" "))
+        !(p.title + " " + p.code + " " + p.category + " " + (p.tags || []).join(" "))
           .toLowerCase()
           .includes(q)
+      )
+        return false;
+      if (
+        filters.tags.length > 0 &&
+        !filters.tags.some((t) =>
+          (p.tags || []).some((pt) => pt.trim().toLowerCase() === t),
+        )
       )
         return false;
       if (
@@ -125,6 +162,7 @@ export default function HomePage() {
 
   const isFiltered =
     filters.sizes.length > 0 ||
+    filters.tags.length > 0 ||
     filters.maxPrice !== DEFAULT_FILTERS.maxPrice ||
     filters.orientation !== "all";
 
@@ -136,6 +174,7 @@ export default function HomePage() {
 
   const activeFilterCount =
     filters.sizes.length +
+    filters.tags.length +
     (filters.maxPrice !== DEFAULT_FILTERS.maxPrice ? 1 : 0) +
     (filters.orientation !== "all" ? 1 : 0);
 
@@ -150,10 +189,6 @@ export default function HomePage() {
         cartCount={store.cartCount}
         bumped={bumped}
         onOpenCart={() => setCartOpen(true)}
-        query={query}
-        onQueryChange={setQuery}
-        SearchSlot={null}
-        CartSlot={null}
         mobileOpen={mobileMenuOpen}
         onMobileOpenChange={setMobileMenuOpen}
       />
@@ -179,16 +214,37 @@ export default function HomePage() {
             <Logo className="h-10 w-[54px] sm:h-14 sm:w-[76px]" />
           </Link>
 
-          <label className="relative flex flex-1 items-center">
+          <form
+            role="search"
+            className="relative flex flex-1 items-center"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const el = document.getElementById("catalogue");
+              el?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
+          >
             <SearchIcon className="pointer-events-none absolute left-3 h-4 w-4 text-ink-soft" />
             <input
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setQuery(next);
+                // Reflect the query in the URL so the home page is deep-linkable
+                // (e.g. /#catalogue?q=neon from other pages via the nav search).
+                const params = new URLSearchParams(location.search);
+                if (next.trim()) params.set("q", next);
+                else params.delete("q");
+                const search = params.toString();
+                navigate(
+                  { pathname: "/", search: search ? `?${search}` : "", hash: location.hash || "" },
+                  { replace: true },
+                );
+              }}
               placeholder="Search prints…"
-              aria-label="Search posters by title or catalogue code"
+              aria-label="Search posters"
               className="w-full rounded-full border border-hairline bg-ground-soft py-2 pr-3 pl-9 text-[14px] text-ink placeholder:text-ink-soft/70 transition focus:border-magenta focus:bg-ground focus:outline-none sm:py-2.5 sm:pl-10"
             />
-          </label>
+          </form>
 
           <button
             type="button"
@@ -245,7 +301,7 @@ export default function HomePage() {
         >
           <div className="flex items-center gap-3">
             <div className="rail -mx-1 flex flex-1 gap-2 overflow-x-auto px-1 py-0.5">
-              {store.categories.map((c) => (
+              {shopCategories.map((c) => (
                 <button
                   key={c}
                   type="button"

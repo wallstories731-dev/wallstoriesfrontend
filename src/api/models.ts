@@ -125,6 +125,12 @@ export function normalizePosters(
       };
     }
     if (!valid) continue;
+    const variantIds: NonNullable<Poster["variantIds"]> = {},
+      rawVariants = asRecord(row.variantIds);
+    for (const size of available) {
+      const v = rawVariants[size];
+      if (typeof v === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(v)) variantIds[size] = v;
+    }
     seen.add(row.id);
     result.push({
       id: row.id,
@@ -154,6 +160,7 @@ export function normalizePosters(
       tags: stringList(row.tags, [], 20),
       featured: row.featured === true,
       customPrices,
+      variantIds,
       carouselImages: Array.isArray(row.carouselImages)
         ? [...new Set(row.carouselImages.filter(isSafeImageUrl))].slice(0, 6)
         : [],

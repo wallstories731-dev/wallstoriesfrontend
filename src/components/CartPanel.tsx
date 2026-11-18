@@ -6,11 +6,12 @@ import { useOffers } from "../context/OffersContext"
 import {
   getContactSettings,
   paymentsEnabled,
-  isTestMode,
   createPaymentOrder,
   openRazorpay,
   verifyPayment,
   PaymentCancelled,
+  quoteShipping,
+  type ShippingQuote,
   type PaymentProof,
 } from "../api"
 import { formatMoney, priceFor, SIZE_DIMS, type SizeKey } from "../data/shop"
@@ -37,6 +38,7 @@ function buildMessage(
   pincode: string,
   note: string,
   ref: string,
+  shippingNote?: string,
 ) {
   const items = lines.map((l, i) =>
     (i + 1) + ". " + l.qty + "× " + l.poster.title + " (" + l.poster.code + ") · " +
@@ -51,7 +53,7 @@ function buildMessage(
     "Total items: " + lines.reduce((count, line) => count + line.qty, 0),
     "Estimated subtotal: " + formatMoney(total),
     "Paper: 300 GSM",
-    "Shipping and final total to be confirmed in chat. Payment not yet made.",
+    shippingNote || "Shipping and final total to be confirmed in chat. Payment not yet made.",
     "",
     "Name: " + name.trim(),
     "City: " + city.trim(),
@@ -353,14 +355,28 @@ export default function CartPanel({ open, onClose, onToast }: Props) {
   const [paying, setPaying] = useState(false)
   const [payError, setPayError] = useState("")
   const [checkoutTest, setCheckoutTest] = useState(false)
-  const [mockSheet, setMockSheet] = useState<null | { amount: number; done: (ok: boolean) => void }>(null)
 
   // View: "selection" while browsing/filling in, "sent" after dispatching
   const [preparedMessage, setPreparedMessage] = useState("")
   const [sentOrder, setSentOrder] = useState<SentOrder | null>(null)
 
-  const dialogRef = useModal(open, () => { if(mockSheet) mockSheet.done(false); if(!paying) onClose() }, paying)
-  const mockDialogRef = useModal(!!mockSheet, () => mockSheet?.done(false))
+  const dialogRef = useModal(open, () => { if(!paying) onClose() }, paying)
+
+  // Delhivery shipping quote, fetched once a full pincode is entered
+  const [quote, setQuote] = useState<ShippingQuote | null>(null)
+  const [quoteStatus, setQuoteStatus] = useState<"idle" | "loading" | "ready" | "error">("idle")
+  const pincodeValid = /^[1-9]\d{5}$/.test(pincode)
+
+  useEffect(() => {
+    setQuote(null)
+    if (!open || !pincodeValid || count === 0) { setQuoteStatus("idle"); return }
+    let active = true
+    setQuoteStatus("loading")
+    quoteShipping(pincode, count, total)
+      .then((q) => { if (active) { setQuote(q); setQuoteStatus("ready") } })
+      .catch(() => { if (active) setQuoteStatus("error") })
+    return () => { active = false }
+  }, [open, pincode, pincodeValid, count, total])
 
   // Reset confirmation when panel is closed and re-opened
   useEffect(() => {
@@ -393,6 +409,16 @@ export default function CartPanel({ open, onClose, onToast }: Props) {
 
   const uniquePrints = new Set(lines.map((l) => l.posterId)).size
 
+  const quoteReady = quoteStatus === "ready" && !!quote
+  const unserviceable = quoteReady && !quote!.serviceable
+  const shippingFee = quoteReady && quote!.serviceable ? quote!.fee : 0
+  const payTotal = total + shippingFee
+  const canOrder = pincodeValid && ((quoteReady && quote!.serviceable) || quoteStatus === "error")
+  const shippingNote = quoteReady && quote!.serviceable
+    ? (shippingFee === 0 ? "Shipping: Free" : "Estimated shipping: " + formatMoney(shippingFee)) +
+      " · Estimated total: " + formatMoney(payTotal) + ". Payment not yet made."
+    : undefined
+
   // ── Order build ─────────────────────────────────────────────────────────────
 
   function buildOrder(via: SentOrder["via"]): SentOrder {
@@ -411,7 +437,7 @@ export default function CartPanel({ open, onClose, onToast }: Props) {
       city: city.trim(),
       pincode: pincode.trim(),
       note: note.trim(),
-      total,
+      total: via === "online" ? payTotal : total,
       sentAt: Date.now(),
       via,
       status: "sent",
@@ -425,7 +451,7 @@ export default function CartPanel({ open, onClose, onToast }: Props) {
     setErrors(errs)
     if (Object.keys(errs).length > 0) { document.getElementById("cp-" + Object.keys(errs)[0])?.focus(); return }
     const order = buildOrder("copy") // via overridden by caller
-    const message = buildMessage(lines, total, name, city, pincode, note, order.ref)
+    const message = buildMessage(lines, total, name, city, pincode, note, order.ref, shippingNote)
     setPreparedMessage(message)
     cb(order, message)
   }
@@ -465,8 +491,6 @@ export default function CartPanel({ open, onClose, onToast }: Props) {
 
   // ── Online payment ───────────────────────────────────────────────────────────
 
-  const askMockPayment = (amount: number) =>
-    new Promise<boolean>((resolve) => setMockSheet({ amount, done: (ok: boolean) => { setMockSheet(null); resolve(ok) } }))
 
   const handlePay = async () => {
     if (paying) return
@@ -488,28 +512,21 @@ export default function CartPanel({ open, onClose, onToast }: Props) {
     try {
       const paymentOrder = await createPaymentOrder({
         ref,
-        amount: total,
-        items: lines.map((l: DetailedLine) => ({ posterId: l.posterId, size: l.size, qty: l.qty })),
+        amount: payTotal,
+        items: lines.map((l: DetailedLine) => ({ productId: l.posterId, variantId: l.poster.variantIds?.[l.size], size: l.size, qty: l.qty })),
         customer: {
           name: name.trim(), phone: digits, email: email.trim() || undefined,
           address: address.trim(), city: city.trim(), pincode: pincode.trim(),
         },
       })
 
-      const testPayment = paymentOrder.mode === "mock" || !!paymentOrder.keyId?.startsWith("rzp_test_")
+      const testPayment = !!paymentOrder.keyId?.startsWith("rzp_test_")
       setCheckoutTest(testPayment)
-      let proof: PaymentProof
-      if (paymentOrder.mode === "mock") {
-        const ok = await askMockPayment(total)
-        if (!ok) throw new Error("Test payment failed. You have not been charged.")
-        proof = { orderId: paymentOrder.orderId, paymentId: `mock_pay_${Date.now()}`, signature: "mock" }
-      } else {
-        proof = await openRazorpay(
-          paymentOrder,
-          { name: name.trim(), contact: digits, email: email.trim() || undefined },
-          `${count} ${count === 1 ? "print" : "prints"} · ${ref}`,
-        )
-      }
+      const proof: PaymentProof = await openRazorpay(
+        paymentOrder,
+        { name: name.trim(), contact: digits, email: email.trim() || undefined },
+        `${count} ${count === 1 ? "print" : "prints"} · ${ref}`,
+      )
 
       const verified = await verifyPayment(proof)
       if (!verified.ok) throw new Error("We could not confirm your payment. If money was deducted, message us with your reference " + ref + ".")
@@ -664,28 +681,36 @@ export default function CartPanel({ open, onClose, onToast }: Props) {
               {/* Total row */}
               <div className="flex items-baseline justify-between">
                 <span className="text-[12px] tracking-[0.14em] text-ink-soft uppercase">
-                  {count} {count === 1 ? "item" : "items"} · estimated
+                  {count} {count === 1 ? "item" : "items"} · {quoteReady && !unserviceable ? "total" : "subtotal"}
                 </span>
                 <span
                   className="tabular-nums text-[26px] leading-none text-ink"
                   style={{ fontFamily: "var(--font-display)", fontWeight: 700 }}
                 >
-                  {formatMoney(total)}
+                  {formatMoney(payTotal)}
                 </span>
               </div>
 
-              {/* Shipping note */}
-              <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-ink-soft">
-                <span className="h-1.5 w-1.5 rounded-full bg-success shrink-0" />
-                {paymentsEnabled
-                  ? "Pay online now, or send your list and pay in chat"
-                  : "Shipping confirmed in chat — no payment taken here"}
+              {/* Shipping status */}
+              <p role="status" className="mt-1.5 flex items-center gap-1.5 text-[11px] text-ink-soft">
+                <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${unserviceable ? "bg-danger" : "bg-success"}`} />
+                {!pincodeValid
+                  ? "Enter your 6-digit pincode to see shipping and order options"
+                  : quoteStatus === "loading" || quoteStatus === "idle"
+                  ? "Calculating shipping…"
+                  : unserviceable
+                  ? "Sorry, we can't deliver to this pincode yet"
+                  : quoteReady
+                  ? `${shippingFee === 0 ? "Free shipping" : "Shipping " + formatMoney(shippingFee)} · subtotal ${formatMoney(total)}${quote!.estimatedDays ? ` · ~${quote!.estimatedDays} days` : ""}`
+                  : "Shipping will be confirmed at checkout"}
               </p>
 
-              {/* Actions */}
+              {/* Actions (shown once a deliverable pincode is entered) */}
+              {canOrder && (
+              <>
               <div className="mt-4 grid gap-2.5">
                 <div className="online-payment-option">
-                    <div className="payment-heading"><span>Razorpay online payment</span><span className="payment-status">{paymentsEnabled ? ((isTestMode || checkoutTest) ? "Test checkout" : "Razorpay checkout") : "Currently unavailable"}</span></div>
+                    <div className="payment-heading"><span>Razorpay online payment</span><span className="payment-status">{paymentsEnabled ? (checkoutTest ? "Test checkout" : "Razorpay checkout") : "Currently unavailable"}</span></div>
                     {payError && (
                       <p id="cp-payment-error" tabIndex={-1} role="alert" className="rounded-[10px] border border-danger/30 bg-danger-soft px-3 py-2 text-[12px] text-danger">
                         {payError}
@@ -699,10 +724,10 @@ export default function CartPanel({ open, onClose, onToast }: Props) {
                       className="flex min-h-[50px] items-center justify-center gap-2 rounded-full bg-[var(--color-ink)] px-6 text-[14px] font-medium tracking-wide text-[var(--color-ground)] shadow-[0_10px_24px_-12px_rgba(8,2,14,0.8)] transition hover:opacity-90 active:scale-[0.985] disabled:cursor-wait disabled:opacity-60 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-magenta)]"
                     >
                       <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
-                      {paying ? "Starting payment…" : `Pay ${formatMoney(total)} online · Razorpay`}
+                      {paying ? "Starting payment…" : quoteReady ? `Pay ${formatMoney(payTotal)} online · Razorpay` : "Pay online · Razorpay"}
                     </button>
                     <p className="text-center text-[11px] text-ink-soft">
-                      UPI, cards and net banking via Razorpay{(isTestMode || checkoutTest) ? " · TEST MODE, no real money" : ""}
+                      UPI, cards and net banking via Razorpay{checkoutTest ? " · TEST MODE, no real money" : ""}
                     </p>
 
                     {!paymentsEnabled && <p id="cp-payment-availability" className="payment-availability">Order in chat while online checkout is unavailable.</p>}
@@ -741,29 +766,10 @@ export default function CartPanel({ open, onClose, onToast }: Props) {
               <p className="mt-3 text-center text-[11px] leading-relaxed text-[var(--color-ink-soft)]">
                 {paymentsEnabled ? "Chat orders are confirmed with you before any payment" : "Orders for WhatsApp/Instagram only — confirmed in chat"}
               </p>
+              </>
+              )}
             </footer>
           </>
-        )}
-        {mockSheet && (
-          <div ref={mockDialogRef} className="absolute inset-0 z-10 flex items-end bg-ink/50 sm:items-center sm:justify-center sm:p-6" role="dialog" aria-modal="true" aria-label="Test payment">
-            <div className="w-full rounded-t-[18px] bg-ground p-6 shadow-xl sm:max-w-[360px] sm:rounded-[18px]">
-              <p className="text-[11px] font-semibold tracking-[0.18em] text-magenta uppercase">Test mode</p>
-              <p className="mt-1 text-[22px] text-ink" style={{ fontFamily: "var(--font-display)", fontWeight: 700 }}>
-                Pay {formatMoney(mockSheet.amount)}
-              </p>
-              <p className="mt-1 text-[12px] leading-relaxed text-ink-soft">
-                This is a simulated payment so you can try the full flow. No real money is taken.
-              </p>
-              <div className="mt-5 grid gap-2.5">
-                <button type="button" onClick={() => mockSheet.done(true)} className="min-h-[46px] rounded-full bg-[var(--color-success)] px-5 text-[14px] font-medium text-white">
-                  Simulate successful payment
-                </button>
-                <button type="button" onClick={() => mockSheet.done(false)} className="min-h-[44px] rounded-full border border-hairline px-5 text-[14px] text-ink">
-                  Simulate failed payment
-                </button>
-              </div>
-            </div>
-          </div>
         )}
       </aside>
     </div>

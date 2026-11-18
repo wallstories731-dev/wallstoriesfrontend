@@ -1,4 +1,4 @@
-import { getSupabase, supabase } from "./client";
+import { fetchSettingsDoc, putSettingsDoc } from "./settingsRepo";
 import { requireAdmin } from "./auth";
 import {
   asRecord,
@@ -73,17 +73,11 @@ export function defaultSiteSettings() {
 }
 let published: Promise<SiteSettings | null> | undefined;
 export function loadPublishedSettings() {
-  if (!supabase) return Promise.resolve(null);
   if (!published)
     published = (async () => {
-      const { data, error } = await getSupabase()
-        .from("ws_posters")
-        .select("data")
-        .eq("id", "shop_settings")
-        .maybeSingle();
-      if (error) throw new Error("Shop settings could not be loaded.");
+      const { data, revision } = await fetchSettingsDoc();
       if (!data) return null;
-      const value = normalizeSiteSettings(data.data);
+      const value = { ...normalizeSiteSettings(data), revision };
       saveAdminSettings(value.contact);
       return value;
     })().catch((e) => {
@@ -94,13 +88,8 @@ export function loadPublishedSettings() {
 }
 export async function loadAdminSiteSettings() {
   await requireAdmin();
-  const { data, error } = await getSupabase()
-    .from("ws_posters")
-    .select("data")
-    .eq("id", "shop_settings")
-    .maybeSingle();
-  if (error) throw new Error("Shop settings could not be loaded.");
-  return normalizeSiteSettings(data?.data);
+  const { data, revision } = await fetchSettingsDoc();
+  return { ...normalizeSiteSettings(data), revision };
 }
 export async function saveAdminSiteSettings(next: SiteSettings) {
   await requireAdmin();
@@ -130,15 +119,15 @@ export async function saveAdminSiteSettings(next: SiteSettings) {
   )
     throw new Error("Enter valid bundle offer values.");
   const value = normalizeSiteSettings(next);
-  const { data, error } = await getSupabase().rpc("ws_save_site_settings", {
-    p_data: value,
-    p_expected_revision: next.revision,
-  });
-  if (error || !Number.isSafeInteger(data))
+  let revision: number;
+  try {
+    revision = await putSettingsDoc({ ...value }, next.revision);
+  } catch {
     throw new Error(
-      "Changes were not published. Reload if another administrator edited them, and check that the settings migration is installed.",
+      "Changes were not published. Reload if another administrator edited them.",
     );
-  const saved = { ...value, revision: data };
+  }
+  const saved = { ...value, revision };
   published = Promise.resolve(saved);
   saveAdminSettings(saved.contact);
   return saved;

@@ -7,12 +7,14 @@ export type FilterState = {
   sizes: SizeKey[]
   maxPrice: number
   orientation: "all" | "portrait" | "square"
+  tags: string[]
 }
 
 export const DEFAULT_FILTERS: FilterState = {
   sizes: [],
   maxPrice: Number.POSITIVE_INFINITY,
   orientation: "all",
+  tags: [],
 }
 
 const ALL_SIZES: SizeKey[] = ["A4", "A3", "A2", "12×18", "18×24"]
@@ -29,6 +31,9 @@ export default function FilterDrawer({ open, filters, onChange, onClose, onReset
   const {posters}=useStore()
   const priceCeiling=Math.max(2000,...posters.filter(p=>p.status!=="draft").flatMap(p=>p.sizes.map(s=>priceFor(p,s))))
   const rangeMax=Math.ceil(priceCeiling/50)*50
+  const tagCounts=new Map<string,number>()
+  for(const p of posters) if(p.status!=="draft") for(const t of new Set((p.tags||[]).map(t=>t.trim().toLowerCase()).filter(Boolean))) tagCounts.set(t,(tagCounts.get(t)||0)+1)
+  const tagList=[...tagCounts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))
   const dialogRef = useModal<HTMLElement>(open, onClose)
 
   if (!open) return null
@@ -43,6 +48,7 @@ export default function FilterDrawer({ open, filters, onChange, onClose, onReset
 
   const isDefault =
     filters.sizes.length === 0 &&
+    filters.tags.length === 0 &&
     filters.maxPrice === DEFAULT_FILTERS.maxPrice &&
     filters.orientation === "all"
 
@@ -153,6 +159,34 @@ export default function FilterDrawer({ open, filters, onChange, onClose, onReset
               ))}
             </div>
           </section>
+
+          {/* Tags */}
+          {tagList.length > 0 && (
+            <section>
+              <h3 className="mb-3 text-[11px] font-semibold tracking-[0.18em] text-ink-soft uppercase">Tags</h3>
+              <div className="flex flex-wrap gap-2">
+                {tagList.map(([t, n]) => {
+                  const active = filters.tags.includes(t)
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => onChange({ ...filters, tags: active ? filters.tags.filter((x) => x !== t) : [...filters.tags, t] })}
+                      aria-pressed={active}
+                      className={`flex min-h-[40px] items-center gap-1.5 rounded-full border px-3.5 text-[13px] transition-all ${
+                        active
+                          ? "border-magenta bg-magenta/10 text-magenta-deep"
+                          : "border-hairline text-ink-soft hover:border-ink/30 hover:text-ink"
+                      }`}
+                    >
+                      {active && <CheckIcon className="h-3.5 w-3.5" />}
+                      #{t} <span className="text-[11px] opacity-60">{n}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            </section>
+          )}
         </div>
 
         <div className="border-t border-hairline p-5">

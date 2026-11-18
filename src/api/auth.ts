@@ -3,9 +3,12 @@ import { getBackendClient } from "./backendClient"
 export async function hasAdminSession(): Promise<boolean> {
   try {
     const client = getBackendClient()
+    await client.ready
     const user = client.getUser()
     // Check if user has admin role
-    return user?.roles?.includes("Admin") || user?.role === "Admin"
+    const names = (Array.isArray(user?.roles) ? user.roles : []).map((r: unknown) =>
+      String(typeof r === "string" ? r : (r as { name?: string })?.name ?? "").toLowerCase())
+    return names.includes("admin") || String(user?.role ?? "").toLowerCase() === "admin"
   } catch {
     return false
   }
@@ -45,7 +48,7 @@ export async function endAdminSession() {
 export function subscribeAuth(callback: () => void) {
   // For now, we'll use storage events to detect auth changes
   const listener = (e: StorageEvent) => {
-    if (e.key === 'access_token') {
+    if (e.key === 'refresh_token') {
       setTimeout(callback, 0)
     }
   }
@@ -55,6 +58,7 @@ export function subscribeAuth(callback: () => void) {
 
 export async function ensureCheckoutSession() {
   const client = getBackendClient()
+  await client.ready
   // For checkout, we need the user to be authenticated
   // The backend doesn't support anonymous sessions, so we'll skip this for now
   // or require users to sign in before checkout

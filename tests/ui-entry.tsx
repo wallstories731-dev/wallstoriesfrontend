@@ -40,15 +40,17 @@ export function TestAdminWorkspace({
 }) {
   return (
     <MemoryRouter initialEntries={[path]}>
-      <SiteContentProvider>
-        <OffersProvider>
-          <StoreProvider>
-            <AdminAuthProvider>
-              <AdminWorkspace api={api} />
-            </AdminAuthProvider>
-          </StoreProvider>
-        </OffersProvider>
-      </SiteContentProvider>
+      <CustomerAuthProvider>
+        <SiteContentProvider>
+          <OffersProvider>
+            <StoreProvider>
+              <AdminAuthProvider>
+                <AdminWorkspace api={api} />
+              </AdminAuthProvider>
+            </StoreProvider>
+          </OffersProvider>
+        </SiteContentProvider>
+      </CustomerAuthProvider>
     </MemoryRouter>
   );
 }
@@ -57,3 +59,31 @@ export {
   defaultSiteSettings,
   normalizeSiteSettings,
 } from "../src/api/publication";
+export { getBackendClient } from "../src/api/backendClient";
+export { adminApi } from "../src/api/admin";
+export { syncCatalog } from "../src/api/catalog";
+export {
+  stageImage,
+  takeStagedImage,
+  stagedImagePreview,
+  releaseStagedImage,
+} from "../src/api/imageStaging";
+export {
+  submitPhotoReview,
+  loadPhotoReviews,
+  loadProductReviews,
+  loadModerationReviews,
+  removeReview,
+} from "../src/api/reviews";
+import PhotoReviews from "../src/components/PhotoReviews";
+export function TestPhotoReviews() {
+  return (
+    <MemoryRouter>
+      <CustomerAuthProvider>
+        <StoreProvider>
+          <PhotoReviews />
+        </StoreProvider>
+      </CustomerAuthProvider>
+    </MemoryRouter>
+  );
+}

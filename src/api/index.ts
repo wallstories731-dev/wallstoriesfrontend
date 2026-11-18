@@ -6,6 +6,7 @@ export * from "./localStore"
 export * from "./orders"
 export * from "./payments"
 export * from "./settings"
+export * from "./shipping"
 export * from "./storage"
 
 export * from "./safety"

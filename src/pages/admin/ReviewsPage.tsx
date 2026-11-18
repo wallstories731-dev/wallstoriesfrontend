@@ -38,10 +38,10 @@ export default function ReviewsPage() {
   }
   return (
     <main>
-      <h1 className="font-display text-3xl font-semibold">Photo reviews</h1>
+      <h1 className="font-display text-3xl font-semibold">Customer reviews</h1>
       <p className="mt-3 text-sm text-ink-soft">
-        Approve customer photos before they appear in the shop. Remove only
-        reviews that should not be displayed.
+        Ratings and comments customers leave on products. Remove only reviews
+        that should not be displayed.
       </p>
       {error && (
         <p role="alert" className="account-error">
@@ -56,7 +56,7 @@ export default function ReviewsPage() {
         <div className="moderation-grid">
           {reviews.map((r) => (
             <article key={r.id} className="moderation-card">
-              <ArtworkImage src={r.photo} alt={"Wall photo by " + r.name} />
+              {r.photo && <ArtworkImage src={r.photo} alt={"Wall photo by " + r.name} />}
               <div>
                 <h2>
                   {r.name} · {r.city}

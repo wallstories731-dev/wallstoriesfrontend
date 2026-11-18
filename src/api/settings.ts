@@ -1,32 +1,22 @@
-import { getSupabase, supabase } from "./client"
-import { requireAdmin } from "./auth"
-import { API_CONFIG } from "./config"
 import { readJson, writeJson } from "./localStore"
+import { fetchSettingsDoc, putSettingsDoc } from "./settingsRepo"
 
-// ─── Shop settings stored in Supabase (shop name, featured print, categories) ─
-
-const TABLE = API_CONFIG.catalogTable
-const SHOP_SETTINGS_ID = "shop_settings"
+// ─── Shop settings stored in the backend (/api/settings) ─────────────────────
 
 /** Save shop settings (name, tagline, instagram, currency) + featured + categories. */
 export async function saveShopSettings(payload: unknown) {
-  await requireAdmin()
-  const { error } = await getSupabase()
-    .from(TABLE)
-    .upsert({ id: SHOP_SETTINGS_ID, data: payload }, { onConflict: "id" })
-  if (error) throw error
+  const { data, revision } = await fetchSettingsDoc()
+  // Merge so sections owned by other editors (content, offers, contact) survive.
+  await putSettingsDoc({ ...(data ?? {}), ...(payload as Record<string, unknown>) }, revision)
 }
 
-/** Load shop settings from Supabase. Returns null if not set up yet. */
+/** Load shop settings from the backend. Returns null if not published yet. */
 export async function loadShopSettings(): Promise<unknown | null> {
-  if (!supabase) return null
-  const { data, error } = await supabase
-    .from(TABLE)
-    .select("data")
-    .eq("id", SHOP_SETTINGS_ID)
-    .maybeSingle()
-  if (error || !data) return null
-  return data.data
+  try {
+    return (await fetchSettingsDoc()).data
+  } catch {
+    return null
+  }
 }
 
 // ─── Admin settings (contact + message templates), saved in this browser ─────

@@ -32,10 +32,10 @@ function DownloadIcon({ className }: { className?: string }) {
 // ─── CSV Export ───────────────────────────────────────────────────────────────
 
 function exportCsv(posters: Poster[]) {
-  const headers = ["ID", "Code", "Title", "Category", "Base Price", "Status", "Sizes", "Badge", "Tags"]
+  const headers = ["ID", "Code", "Title", "Category", "Base Price", "Status", "Sizes", "Tags"]
   const rows = posters.map((p) => [
     p.id, p.code, p.title, p.category, p.basePrice,
-    p.status ?? "active", p.sizes.join(", "), p.badge ?? "",
+    p.status ?? "active", p.sizes.join(", "),
     (p.tags ?? []).join(", "),
   ])
   const csv = [headers, ...rows].map((r) => r.map(csvCell).join(",")).join("\n")
@@ -70,17 +70,16 @@ type FormState = {
   category: string
   tags: string
   image: string
+  carouselImages: string[]
   sizes: SizeKey[]
   sizePrices: Partial<Record<SizeKey, { price: string; mrp: string }>>
-  badge: string
-  featured: boolean
   status: "active" | "draft"
 }
 
 const EMPTY_FORM: FormState = {
   title: "", code: "", description: "", category: "Movies",
-  tags: "", image: "", sizes: ["A4", "A3"], sizePrices: {},
-  badge: "", featured: false, status: "active",
+  tags: "", image: "", carouselImages: [], sizes: ["A4", "A3"], sizePrices: {},
+  status: "active",
 }
 
 function posterToForm(p: Poster): FormState {
@@ -98,10 +97,9 @@ function posterToForm(p: Poster): FormState {
     category: p.category,
     tags: (p.tags ?? []).join(", "),
     image: p.image,
+    carouselImages: p.carouselImages ?? [],
     sizes: p.sizes,
     sizePrices,
-    badge: p.badge ?? "",
-    featured: p.featured ?? false,
     status: p.status ?? "active",
   }
 }
@@ -118,6 +116,10 @@ function PrintForm({
   const [form, setForm] = useState(initial)
   const [uploading, setUploading] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const galleryRef = useRef<HTMLInputElement>(null)
+  const [galleryUploadingIdx, setGalleryUploadingIdx] = useState<number | null>(null)
+  // When set, the next gallery file picker open targets a specific slot; otherwise bulk.
+  const galleryTarget = useRef<number | null>(null)
 
   const set = (key: keyof FormState, val: unknown) =>
     setForm((f) => ({ ...f, [key]: val }))
@@ -129,23 +131,93 @@ function PrintForm({
   }
 
   const handleImageFile = async (file: File) => {
-    try { validateImageFile(file) } catch (e) { alert((e as Error).message); return }
+    const url = await uploadImageFile(file)
+    if (url) set("image", url)
+  }
+
+  /** Uploads an image file and returns the final URL (staged or backend). */
+  const uploadImageFile = async (file: File): Promise<string | null> => {
+    try { validateImageFile(file) } catch (e) { alert((e as Error).message); return null }
     const reader = new FileReader()
-    reader.onload = async (e) => {
-      const dataUrl = e.target?.result as string
-      set("image", dataUrl)
-      try {
-        setUploading(true)
-        const path = `prints/${Date.now()}-${file.name}`
-        const url = await uploadImage(dataUrl, path)
-        set("image", url)
-      } catch {
-        // keep data URL as fallback
-      } finally {
-        setUploading(false)
+    return new Promise((resolve) => {
+      reader.onload = async (e) => {
+        const dataUrl = e.target?.result as string
+        try {
+          const path = `prints/${Date.now()}-${file.name}`
+          const url = await uploadImage(dataUrl, path)
+          resolve(url)
+        } catch {
+          resolve(dataUrl)
+        }
       }
+      reader.readAsDataURL(file)
+    })
+  }
+
+  const handleGalleryFile = async (file: File, index: number) => {
+    setGalleryUploadingIdx(index)
+    const url = await uploadImageFile(file)
+    if (url) {
+      setForm((f) => ({
+        ...f,
+        carouselImages: f.carouselImages.map((v, i) => (i === index ? url : v)),
+      }))
     }
-    reader.readAsDataURL(file)
+    setGalleryUploadingIdx(null)
+  }
+
+  const addGalleryImage = () => {
+    if (form.carouselImages.length >= 6) return
+    setForm((f) => ({ ...f, carouselImages: [...f.carouselImages, ""] }))
+  }
+
+  const removeGalleryImage = (index: number) => {
+    setForm((f) => ({ ...f, carouselImages: f.carouselImages.filter((_, i) => i !== index) }))
+  }
+
+  const handleGalleryUploadClick = () => {
+    if (form.carouselImages.length >= 6) return
+    galleryTarget.current = null
+    galleryRef.current?.click()
+  }
+
+  const handleSlotUploadClick = (index: number) => {
+    galleryTarget.current = index
+    galleryRef.current?.click()
+  }
+
+  const handleGalleryInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    e.target.value = ""
+    if (!files || !files.length) return
+    if (galleryTarget.current !== null) {
+      void handleGalleryFile(files[0], galleryTarget.current)
+    } else {
+      void handleBulkGalleryFiles(files)
+    }
+    galleryTarget.current = null
+  }
+
+  const handleBulkGalleryFiles = async (files: FileList) => {
+    const room = 6 - form.carouselImages.length
+    const list = Array.from(files).slice(0, Math.max(0, room))
+    if (!list.length) return
+    setForm((f) => ({
+      ...f,
+      carouselImages: [...f.carouselImages, ...list.map(() : string => "")],
+    }))
+    for (let i = 0; i < list.length; i++) {
+      const slot = form.carouselImages.length + i
+      setGalleryUploadingIdx(slot)
+      const url = await uploadImageFile(list[i])
+      if (url) {
+        setForm((f) => ({
+          ...f,
+          carouselImages: f.carouselImages.map((v, j) => (j === slot ? url : v)),
+        }))
+      }
+      setGalleryUploadingIdx(null)
+    }
   }
 
   const toggleSize = (s: SizeKey) => {
@@ -166,6 +238,10 @@ function PrintForm({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
+    if (!form.image) {
+      window.alert("Add a product image (URL or upload) before saving.")
+      return
+    }
     const customPrices: Poster["customPrices"] = {}
     for (const s of form.sizes) {
       const sp = form.sizePrices[s]
@@ -177,12 +253,11 @@ function PrintForm({
       description: form.description,
       category: form.category as Poster["category"],
       tags: form.tags.split(",").map((t) => t.trim()).filter(Boolean),
-      image: form.image || `https://images.unsplash.com/photo-1601042879364-f3947d3f9c16?w=900&h=1200&fit=crop&auto=format&q=80`,
+      image: form.image,
       alt: form.title,
       sizes: form.sizes,
       customPrices,
-      badge: (form.badge || undefined) as Poster["badge"],
-      featured: form.featured,
+      carouselImages: form.carouselImages.filter(Boolean),
       status: form.status,
       basePrice: parseInt(form.sizePrices["A4"]?.price ?? "499") || 499,
     })
@@ -244,9 +319,9 @@ function PrintForm({
         </div>
       </div>
 
-      {/* Image */}
+      {/* Main image */}
       <div>
-        <label className={labelCls} style={labelStyle}>Image</label>
+        <label className={labelCls} style={labelStyle}>Main image *</label>
         <div className="flex gap-3">
           {form.image && (
             <img src={form.image} alt="" className="h-20 w-16 rounded-[8px] object-cover shrink-0" style={{ border: "1px solid var(--color-hairline)" }} />
@@ -257,7 +332,7 @@ function PrintForm({
               style={fieldStyle}
               value={form.image.startsWith("data:") ? "" : form.image}
               onChange={(e) => set("image", e.target.value)}
-              placeholder="https://images.unsplash.com/…"
+              placeholder="Image URL, or upload a file"
             />
             <button
               type="button"
@@ -268,8 +343,82 @@ function PrintForm({
             >
               {uploading ? "Uploading…" : "Upload file"}
             </button>
-            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImageFile(f) }} />
+            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleImageFile(f); e.target.value = "" }} />
           </div>
+        </div>
+      </div>
+
+      {/* Gallery images (multiple) */}
+      <div>
+        <label className={labelCls} style={labelStyle}>Gallery images ({form.carouselImages.length}/6)</label>
+        <p className="mb-2 text-[11px]" style={{ color: "var(--color-ink-soft)" }}>
+          Additional images shown in the product carousel. The main image is always first.
+        </p>
+        <div className="space-y-2">
+          {form.carouselImages.map((url, i) => (
+            <div key={i} className="flex items-center gap-3">
+              {url ? (
+                <img src={url} alt="" className="h-14 w-12 rounded-[6px] object-cover shrink-0" style={{ border: "1px solid var(--color-hairline)" }} />
+              ) : galleryUploadingIdx === i ? (
+                <div className="flex h-14 w-12 shrink-0 items-center justify-center rounded-[6px] text-[10px]" style={{ border: "1px solid var(--color-hairline)", color: "var(--color-ink-soft)", background: "var(--color-ground-soft)" }}>…</div>
+              ) : (
+                <div className="flex h-14 w-12 shrink-0 items-center justify-center rounded-[6px] text-[10px]" style={{ border: "1px dashed var(--color-hairline)", color: "var(--color-ink-soft)" }}>img</div>
+              )}
+              <input
+                className={fieldCls}
+                style={fieldStyle}
+                value={url.startsWith("data:") ? "" : url}
+                onChange={(e) => setForm((f) => ({ ...f, carouselImages: f.carouselImages.map((v, j) => (j === i ? e.target.value : v)) }))}
+                placeholder="Image URL, or upload"
+              />
+              <button
+                type="button"
+                onClick={() => handleSlotUploadClick(i)}
+                disabled={galleryUploadingIdx !== null}
+                className="shrink-0 rounded-[8px] border px-2.5 py-1.5 text-[11px] font-medium transition hover:opacity-80 disabled:opacity-50"
+                style={{ borderColor: "var(--color-hairline)", color: "var(--color-ink-soft)", background: "var(--color-ground-soft)" }}
+              >
+                {galleryUploadingIdx === i ? "…" : "Upload"}
+              </button>
+              <button
+                type="button"
+                onClick={() => removeGalleryImage(i)}
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px] transition hover:opacity-80"
+                style={{ color: "var(--color-danger)" }}
+                aria-label={`Remove gallery image ${i + 1}`}
+              >
+                <TrashIcon className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="mt-2 flex gap-2">
+          <button
+            type="button"
+            onClick={addGalleryImage}
+            disabled={form.carouselImages.length >= 6}
+            className="rounded-[8px] border px-3 py-1.5 text-[12px] font-medium transition hover:opacity-80 disabled:opacity-50"
+            style={{ borderColor: "var(--color-hairline)", color: "var(--color-ink-soft)", background: "var(--color-ground-soft)" }}
+          >
+            + Add image slot
+          </button>
+          <button
+            type="button"
+            onClick={handleGalleryUploadClick}
+            disabled={form.carouselImages.length >= 6}
+            className="rounded-[8px] border px-3 py-1.5 text-[12px] font-medium transition hover:opacity-80 disabled:opacity-50"
+            style={{ borderColor: "var(--color-hairline)", color: "var(--color-ink-soft)", background: "var(--color-ground-soft)" }}
+          >
+            Bulk upload
+          </button>
+          <input
+            ref={galleryRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={handleGalleryInputChange}
+          />
         </div>
       </div>
 
@@ -326,21 +475,7 @@ function PrintForm({
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        {/* Badge */}
-        <div>
-          <label className={labelCls} style={labelStyle}>Badge</label>
-          <div className="relative">
-            <select className={fieldCls + " appearance-none pr-8"} style={fieldStyle} value={form.badge} onChange={(e) => set("badge", e.target.value)}>
-              <option value="">None</option>
-              <option value="new">New</option>
-              <option value="bestseller">Bestseller</option>
-              <option value="few-left">Few left</option>
-            </select>
-            <ChevronIcon className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2" />
-          </div>
-        </div>
-
+      <div className="grid gap-4 sm:grid-cols-2">
         {/* Status */}
         <div>
           <label className={labelCls} style={labelStyle}>Status</label>
@@ -351,27 +486,6 @@ function PrintForm({
             </select>
             <ChevronIcon className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2" />
           </div>
-        </div>
-
-        {/* Featured */}
-        <div className="flex items-end pb-1">
-          <button
-            type="button"
-            onClick={() => set("featured", !form.featured)}
-            className="flex items-center gap-2 text-[13px] font-medium"
-            style={{ color: "var(--color-ink)" }}
-          >
-            <span
-              className="relative inline-flex h-5 w-9 rounded-full transition-colors"
-              style={{ background: form.featured ? "var(--color-magenta)" : "var(--color-hairline)" }}
-            >
-              <span
-                className="absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform"
-                style={{ transform: form.featured ? "translateX(16px)" : "translateX(2px)" }}
-              />
-            </span>
-            Featured
-          </button>
         </div>
       </div>
 
@@ -527,7 +641,7 @@ export default function PrintsPage() {
                     {allSelected && <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round"><path d="m5 12.5 4.5 4.5L19 7" /></svg>}
                   </button>
                 </th>
-                {["Print", "Code", "Category", "Base price", "Sizes", "Status", "Badge", ""].map((h) => (
+                {["Print", "Code", "Category", "Base price", "Sizes", "Status", ""].map((h) => (
                   <th key={h} className="px-3 py-3 text-left text-[11px] font-semibold tracking-[0.1em] uppercase" style={{ color: "var(--color-ink-soft)" }}>{h}</th>
                 ))}
               </tr>
@@ -548,7 +662,18 @@ export default function PrintsPage() {
                     </td>
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-2.5">
-                        <img src={poster.image} alt="" className="h-10 w-8 shrink-0 rounded-[5px] object-cover" />
+                        <div className="relative shrink-0">
+                          <img src={poster.image} alt="" className="h-10 w-8 rounded-[5px] object-cover" />
+                          {(poster.carouselImages?.length ?? 0) > 0 && (
+                            <span
+                              className="absolute -bottom-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-semibold"
+                              style={{ background: "var(--color-ink)", color: "var(--color-ground)" }}
+                              title={`${(poster.carouselImages?.length ?? 0)} gallery image(s)`}
+                            >
+                              +{poster.carouselImages?.length}
+                            </span>
+                          )}
+                        </div>
                         <span className="font-medium max-w-[140px] truncate" style={{ color: "var(--color-ink)" }}>{poster.title}</span>
                       </div>
                     </td>
@@ -567,9 +692,6 @@ export default function PrintsPage() {
                         {isActive ? "Active" : "Draft"}
                       </span>
                     </td>
-                    <td className="px-3 py-3" style={{ color: "var(--color-ink-soft)" }}>
-                      {poster.badge ? <span className="capitalize">{poster.badge}</span> : "—"}
-                    </td>
                     <td className="px-3 py-3">
                       <div className="flex items-center gap-1">
                         <button onClick={() => openEdit(poster)} className="flex h-7 w-7 items-center justify-center rounded-[6px] transition hover:bg-[var(--color-ground-soft)]" style={{ color: "var(--color-ink-soft)" }} title="Edit"><EditIcon className="h-3.5 w-3.5" /></button>
@@ -581,7 +703,7 @@ export default function PrintsPage() {
               })}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-[13px]" style={{ color: "var(--color-ink-soft)" }}>
+                  <td colSpan={8} className="py-12 text-center text-[13px]" style={{ color: "var(--color-ink-soft)" }}>
                     No prints match your search.
                   </td>
                 </tr>

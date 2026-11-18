@@ -22,8 +22,19 @@ const {TestApp,router,validateReview,validateReviewPhoto,subscribePhotoReviews,o
 const adminSeedFixture=structuredClone(sampleAdminData());
 async function mount(path='/',saved={}) { localStorage.clear();for(const [key,value] of Object.entries(saved))localStorage.setItem(key,JSON.stringify(value));opened=[];await React.act(async()=>{await router.navigate(path)});render(React.createElement(TestApp));await React.act(async()=>{await new Promise(resolve=>setTimeout(resolve,5))});return userEvent.setup({document,applyAccept:false}) }
 afterEach(()=>{cleanup();assert.equal(document.body.style.overflow,'')})
-test('search dropdown opens its product, and unknown routes recover without a hook error',async()=>{
- const user=await mount();const search=screen.getByLabelText('Search posters');await user.type(search,'Neon');const results=screen.getAllByRole('link').filter(a=>a.textContent.includes('Neon Tokyo') && a.getAttribute('href')==='/print/neon-tokyo');assert.ok(results.length);await user.click(results[0]);await screen.findByRole('heading',{name:'Neon Tokyo'});assert.equal(router.state.location.pathname,'/print/neon-tokyo');await React.act(async()=>{await router.navigate('/missing-route')});await screen.findByRole('heading',{name:/Good walls/,level:1});assert.equal(router.state.location.pathname,'/')
+test('catalogue search filters the grid in place and unknown routes recover without a hook error',async()=>{
+ const user=await mount();
+ // Only one search input exists on the home page now (the old nav dropdown was removed).
+ assert.equal(screen.getAllByLabelText('Search posters').length,1);
+ const search=screen.getByLabelText('Search posters');
+ const before=document.querySelectorAll('.poster-card').length;assert.ok(before>1);
+ await user.type(search,'Neon');
+ await waitFor(()=>assert.ok(document.querySelectorAll('.poster-card').length<before));
+ // At least one Neon Tokyo card is still visible after filtering.
+ assert.ok(screen.getByRole('button',{name:'View Neon Tokyo'}));
+ await user.clear(search);
+ await waitFor(()=>assert.equal(document.querySelectorAll('.poster-card').length,before));
+ await React.act(async()=>{await router.navigate('/missing-route')});await screen.findByRole('heading',{name:/Good walls/,level:1});assert.equal(router.state.location.pathname,'/')
 })
 test('filters, empty results, reset, focus trapping and Escape restore the trigger',async()=>{
  const user=await mount();const trigger=screen.getByLabelText('Open filters');await user.click(trigger);const dialog=screen.getByRole('dialog',{name:'Filter posters'});assert.ok(dialog.contains(document.activeElement));assert.equal(document.body.style.overflow,'hidden');await user.click(within(dialog).getByRole('button',{name:'square',exact:true}));await user.click(within(dialog).getByRole('button',{name:'Show results'}));await screen.findByText('Nothing under that name yet.');await user.click(screen.getByRole('button',{name:'Clear the filters'}));assert.ok(document.querySelectorAll('.poster-card').length>0);await user.click(trigger);const buttons=within(screen.getByRole('dialog',{name:'Filter posters'})).getAllByRole('button');buttons.at(-1).focus();await user.tab();assert.ok(screen.getByRole('dialog',{name:'Filter posters'}).contains(document.activeElement));await user.keyboard('{Escape}');assert.equal(screen.queryByRole('dialog',{name:'Filter posters'}),null);assert.ok(document.activeElement===trigger)

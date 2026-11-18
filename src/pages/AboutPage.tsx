@@ -14,15 +14,7 @@ export default function AboutPage() {
   return (
     <div className="min-h-screen" style={{ background: "var(--color-ground)" }}>
       <AnnouncementBar />
-      <SiteNav
-        cartCount={cartCount}
-        bumped={false}
-        onOpenCart={() => {}}
-        query=""
-        onQueryChange={() => {}}
-        SearchSlot={null}
-        CartSlot={null}
-      />
+      <SiteNav cartCount={cartCount} bumped={false} onOpenCart={() => {}} />
 
       <main className="mx-auto max-w-[1240px] px-4 py-14 sm:px-8 sm:py-20">
         {/* Hero */}
@@ -60,16 +52,6 @@ export default function AboutPage() {
             </p>
           </div>
 
-          <div
-            className="relative h-[420px] overflow-hidden rounded-[18px] md:h-[520px]"
-            style={{ background: "var(--color-ground-soft)" }}
-          >
-            <img
-              src="https://images.unsplash.com/photo-1541123437800-1bb1317badc2?w=900&h=1200&fit=crop&auto=format&q=80"
-              alt="Posters laid out on a light surface"
-              className="h-full w-full object-cover"
-            />
-          </div>
         </div>
 
         {/* Values */}

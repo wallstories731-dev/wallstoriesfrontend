@@ -38,7 +38,7 @@ export default function ContactPage() {
   return (
     <div className="min-h-screen" style={{ background: "var(--color-ground)" }}>
       <AnnouncementBar />
-      <SiteNav cartCount={cartCount} bumped={false} onOpenCart={() => {}} query="" onQueryChange={() => {}} SearchSlot={null} CartSlot={null} />
+      <SiteNav cartCount={cartCount} bumped={false} onOpenCart={() => {}} />
 
       <main className="mx-auto max-w-[1240px] px-4 py-14 sm:px-8 sm:py-20">
         <header className="mb-14 text-center">

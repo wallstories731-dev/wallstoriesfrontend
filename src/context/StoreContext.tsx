@@ -4,7 +4,6 @@ import {
   normalizeShop,
   normalizeCategories,
   normalizeFeatured,
-  stringList,
 } from "../api/models";
 /**
  * StoreContext — single source of truth for the entire app.
@@ -36,14 +35,26 @@ import {
 import { type CartLine } from "../hooks/useCart";
 import {
   loadPosters,
+  syncCatalog,
   loadShopSettings,
-  savePosters,
   saveShopSettings,
   readJson,
   writeJson,
   normalizeCart,
 } from "../api";
 import { makeOrderRef, type AdminOrder } from "../data/adminOrders";
+import { useCustomerAuth } from "./CustomerAuthContext";
+import {
+  loadWishlistIds,
+  addWishlistItem,
+  removeWishlistItem,
+} from "../api/account";
+
+/** Asks the router (see RouteEffects) to send a signed-out visitor to the login page. */
+export const LOGIN_REQUIRED_EVENT = "ws:login-required";
+function requestLogin() {
+  window.dispatchEvent(new Event(LOGIN_REQUIRED_EVENT));
+}
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -165,12 +176,8 @@ export function useStore() {
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   // Catalog
-  const [posters, setPostersState] = useState<Poster[]>(() =>
-    normalizePosters(
-      readJson<unknown>("ws_posters_v1", seedPosters),
-      seedPosters,
-    ),
-  );
+  const { member, loading: authLoading } = useCustomerAuth();
+  const [posters, setPostersState] = useState<Poster[]>([]);
 
   // Categories
   const [categories, setCategoriesState] = useState<string[]>(() =>
@@ -200,9 +207,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   );
 
   // Wishlist
-  const [wishlist, setWishlist] = useState<string[]>(() =>
-    stringList(readJson<unknown>("ws_wishlist_v1", []), [], 500),
-  );
+  const [wishlist, setWishlist] = useState<string[]>([]);
 
   // Enquiries
   const [enquiries, setEnquiries] = useState<Enquiry[]>(() =>
@@ -210,17 +215,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   );
 
   // Sent orders
-  const [sentOrders, setSentOrders] = useState<SentOrder[]>(() =>
-    readJson("ws_sent_orders_v1", []),
-  );
+  const [sentOrders, setSentOrders] = useState<SentOrder[]>([]);
 
   const [syncing, setSyncing] = useState(false);
 
   // ── Persist slices ────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    writeJson("ws_posters_v1", posters);
-  }, [posters]);
   useEffect(() => {
     writeJson("ws_categories_v1", categories);
   }, [categories]);
@@ -234,16 +234,40 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     writeJson("sps.selection.v1", cartLines);
   }, [cartLines]);
   useEffect(() => {
-    writeJson("ws_wishlist_v1", wishlist);
-  }, [wishlist]);
-  useEffect(() => {
     writeJson("ws_enquiries_v1", enquiries);
   }, [enquiries]);
+  // Catalog/wishlist/order caches from earlier versions must not resurface.
   useEffect(() => {
-    writeJson("ws_sent_orders_v1", sentOrders);
-  }, [sentOrders]);
+    for (const key of ["ws_posters_v1", "ws_wishlist_v1", "ws_sent_orders_v1"])
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        /* storage unavailable */
+      }
+  }, []);
 
-  // ── Bootstrap from Supabase ───────────────────────────────────────────────
+  // Wishlist lives on the backend; cart and receipts are cleared on sign-out.
+  const memberId = member?.id ?? null;
+  useEffect(() => {
+    if (authLoading) return;
+    if (!memberId) {
+      setWishlist([]);
+      setCartLines([]);
+      setSentOrders([]);
+      return;
+    }
+    let active = true;
+    loadWishlistIds()
+      .then((ids) => {
+        if (active) setWishlist(ids);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [memberId, authLoading]);
+
+  // ── Bootstrap from the backend ───────────────────────────────────────────────
 
   useEffect(() => {
     let active = true;
@@ -305,6 +329,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // ── Cart ──────────────────────────────────────────────────────────────────
 
   const addToCart = useCallback((posterId: string, size: SizeKey, qty = 1) => {
+    if (!memberId) return requestLogin();
     if (!Number.isInteger(qty) || qty < 1 || qty > 20) return;
     setCartLines((prev) => {
       const idx = prev.findIndex(
@@ -315,7 +340,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       next[idx] = { ...next[idx], qty: Math.min(20, next[idx].qty + qty) };
       return next;
     });
-  }, []);
+  }, [memberId]);
 
   const setCartQty = useCallback(
     (posterId: string, size: SizeKey, qty: number) => {
@@ -381,13 +406,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   // ── Wishlist ──────────────────────────────────────────────────────────────
 
-  const toggleWishlist = useCallback((posterId: string) => {
-    setWishlist((prev) =>
-      prev.includes(posterId)
-        ? prev.filter((id) => id !== posterId)
-        : [...prev, posterId],
-    );
-  }, []);
+  const toggleWishlist = useCallback(
+    (posterId: string) => {
+      if (!memberId) return requestLogin();
+      const had = wishlist.includes(posterId);
+      setWishlist((prev) =>
+        had ? prev.filter((id) => id !== posterId) : [...prev, posterId],
+      );
+      (had ? removeWishlistItem(posterId) : addWishlistItem(posterId)).catch(
+        () =>
+          setWishlist((prev) =>
+            had
+              ? [...prev, posterId]
+              : prev.filter((id) => id !== posterId),
+          ),
+      );
+    },
+    [memberId, wishlist],
+  );
 
   const isWishlisted = useCallback(
     (posterId: string) => wishlist.includes(posterId),
@@ -439,7 +475,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setSyncing(true);
     try {
       await Promise.all([
-        savePosters(posters),
+        syncCatalog(posters),
         saveShopSettings({ shop, featuredConfig, categories }),
       ]);
     } finally {

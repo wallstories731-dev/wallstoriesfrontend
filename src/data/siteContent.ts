@@ -36,7 +36,7 @@ export const DEFAULT_SITE_CONTENT: SiteContent = {
     enabled: true,
     text: "Printed to order on 300 GSM matte · Ships across India in 4–6 days",
   },
-  hero: { featuredPosterIds: ["dune-shadow", "monstera-study", "neon-tokyo"] },
+  hero: { featuredPosterIds: [] },
   faq: [
     {
       id: "faq-1",

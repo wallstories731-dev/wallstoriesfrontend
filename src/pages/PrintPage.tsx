@@ -33,6 +33,7 @@ import {
   InstagramIcon,
 } from "../components/icons";
 import CartPanel from "../components/CartPanel";
+import ProductReviews from "../components/ProductReviews";
 
 // ─── Zoom lightbox ────────────────────────────────────────────────────────────
 
@@ -650,10 +651,6 @@ export default function PrintPage() {
         cartCount={store.cartCount}
         bumped={false}
         onOpenCart={() => setCartOpen(true)}
-        query=""
-        onQueryChange={() => {}}
-        SearchSlot={null}
-        CartSlot={null}
       />
 
       {/* Top bar */}
@@ -926,6 +923,13 @@ export default function PrintPage() {
           </div>
         </div>
       </main>
+
+      {/* Customer reviews */}
+      <section className="border-t border-hairline">
+        <div className="mx-auto max-w-[1240px] px-4 sm:px-8">
+          <ProductReviews productId={poster.id} productTitle={poster.title} />
+        </div>
+      </section>
 
       {/* Pairs well with */}
       <PairsWellWith

@@ -9,55 +9,49 @@ import { useOffers } from "../context/OffersContext"
 import { formatMoney, priceFor } from "../data/shop"
 import type { SizeKey } from "../data/shop"
 
-// 6 curated bundles using real poster IDs
+// Curated bundles; only sets whose catalogue codes exist in the backend catalogue are shown
 const SETS = [
   {
     id: "night-city",
     name: "Night City",
     tagline: "For walls that hold their breath after dark",
     description: "Three prints that share the same grammar: sodium light, wet surfaces, and the particular silence of a city at 2 AM.",
-    posterIds: ["neon-tokyo", "crossing", "quiet-planet"],
-    cover: "https://images.unsplash.com/photo-1601042879364-f3947d3f9c16?w=900&h=1200&fit=crop&auto=format&q=80",
+    posterCodes: ["WS-MOV-01", "WS-MOV-02", "WS-TYP-01"],
   },
   {
     id: "desert-light",
     name: "Desert Light",
     tagline: "Warmth, scale, and silence",
     description: "Earth tones in dialogue — the sweeping and the still. These three read as one piece when hung together.",
-    posterIds: ["golden-fields", "dune-shadow", "fog-pines"],
-    cover: "https://images.unsplash.com/photo-1750859876218-7c66b60afa02?w=900&h=1200&fit=crop&auto=format&q=80",
+    posterCodes: ["WS-NAT-01", "WS-NAT-02", "WS-NAT-03"],
   },
   {
     id: "analog-soul",
     name: "Analog Soul",
     tagline: "Rooms that play records",
     description: "Vinyl lovers, this one is for you. Side B and First Press pair perfectly — add the Lubitel for a collector corner.",
-    posterIds: ["first-press", "side-b", "lubitel"],
-    cover: "https://images.unsplash.com/photo-1485726696757-76885c99f0f5?w=900&h=1200&fit=crop&auto=format&q=80",
+    posterCodes: ["WS-MUS-01", "WS-MUS-02", "WS-VIN-01"],
   },
   {
     id: "abstract-trio",
     name: "Abstract Trio",
     tagline: "Shape, colour, and tension",
     description: "Warm against cool against neutral. Hang all three in a row and you have a coherent gallery wall that surprises.",
-    posterIds: ["soft-machine", "blue-torsion", "quiet-planet"],
-    cover: "https://images.unsplash.com/photo-1738937444519-f0a7084c955e?w=900&h=1200&fit=crop&auto=format&q=80",
+    posterCodes: ["WS-ABS-01", "WS-ABS-02", "WS-TYP-01"],
   },
   {
     id: "botanical-calm",
     name: "Botanical Calm",
     tagline: "Plants, light, still things",
     description: "Slow prints for slow rooms. These work in a bedroom, a study, or anywhere you want the wall to quiet down.",
-    posterIds: ["monstera-study", "fog-pines", "golden-fields"],
-    cover: "https://images.unsplash.com/photo-1533038590840-1cde6e668a91?w=900&h=1200&fit=crop&auto=format&q=80",
+    posterCodes: ["WS-BOT-01", "WS-NAT-03", "WS-NAT-01"],
   },
   {
     id: "collector-corner",
     name: "Collector's Corner",
     tagline: "Shelves, courts, and things with character",
     description: "For the desk corner or the alcove — each print has the quality of an object rather than a decoration.",
-    posterIds: ["shelf-life", "court-light", "lubitel"],
-    cover: "https://images.unsplash.com/photo-1784316395297-c1f0b835242b?w=900&h=1200&fit=crop&auto=format&q=80",
+    posterCodes: ["WS-VIN-02", "WS-SPR-01", "WS-VIN-01"],
   },
 ]
 
@@ -83,8 +77,8 @@ function SetCard({ setDef, onAddAll }: {
   const [size, setSize] = useState<SizeKey>(DEFAULT_SIZE)
   const [added, setAdded] = useState(false)
 
-  const setPosters = setDef.posterIds
-    .map((id) => posters.find((p) => p.id === id))
+  const setPosters = setDef.posterCodes
+    .map((code) => posters.find((p) => p.code === code))
     .filter(p=>p && p.status!=="draft") as typeof posters
 
   const subtotal = setPosters.reduce((n, p) => n + priceFor(p, size), 0)
@@ -92,6 +86,7 @@ function SetCard({ setDef, onAddAll }: {
     ? subtotal * (bundleRule.discountPercent / 100)
     : 0
   const total = subtotal
+  const cover = setPosters[0]?.image
 
   const allSizes = setPosters.reduce<SizeKey[]>((acc, p) => {
     return acc.filter((s) => p.sizes.includes(s))
@@ -116,11 +111,13 @@ function SetCard({ setDef, onAddAll }: {
         className="relative h-[200px] overflow-hidden"
         style={{ background: "var(--color-ground-soft)" }}
       >
-        <ArtworkImage
-          src={setDef.cover}
-          alt={setDef.name}
-          className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
-        />
+        {cover && (
+          <ArtworkImage
+            src={cover}
+            alt={setDef.name}
+            className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
+          />
+        )}
         {/* Mini poster thumbnails */}
         <div className="absolute bottom-3 left-3 flex gap-1.5">
           {setPosters.slice(0, 3).map((p) => (
@@ -199,13 +196,16 @@ function SetCard({ setDef, onAddAll }: {
 }
 
 export default function GallerySetsPage() {
-  const { addToCart, cartCount } = useStore()
+  const { addToCart, cartCount, posters } = useStore()
   const { config } = useOffers()
   const [cartOpen, setCartOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [bumped, setBumped] = useState(false)
 
   const discountPct = config.bundleRule.discountPercent
+  const visibleSets = SETS.filter((set) =>
+    set.posterCodes.some((code) => posters.some((p) => p.code === code && p.status !== "draft")),
+  )
 
   const handleAddAll = (ids: string[], size: SizeKey) => {
     ids.forEach((id) => addToCart(id, size, 1))
@@ -218,15 +218,7 @@ export default function GallerySetsPage() {
   return (
     <div className="min-h-screen" style={{ background: "var(--color-ground)" }}>
       <AnnouncementBar />
-      <SiteNav
-        cartCount={cartCount}
-        bumped={bumped}
-        onOpenCart={() => setCartOpen(true)}
-        query=""
-        onQueryChange={() => {}}
-        SearchSlot={null}
-        CartSlot={null}
-      />
+      <SiteNav cartCount={cartCount} bumped={bumped} onOpenCart={() => setCartOpen(true)} />
 
       <main className="mx-auto max-w-[1240px] px-4 py-12 sm:px-8 sm:py-16">
         {/* Header */}
@@ -248,10 +240,15 @@ export default function GallerySetsPage() {
 
         {/* Sets grid */}
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {SETS.map((s) => (
+          {visibleSets.map((s) => (
             <SetCard key={s.id} setDef={s} onAddAll={handleAddAll} />
           ))}
         </div>
+        {visibleSets.length === 0 && (
+          <p className="text-center text-[15px]" style={{ color: "var(--color-ink-soft)" }}>
+            No gallery sets are available right now. Check back soon.
+          </p>
+        )}
       </main>
 
       <Footer />

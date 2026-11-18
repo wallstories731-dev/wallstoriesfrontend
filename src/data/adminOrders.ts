@@ -12,8 +12,9 @@ export type OrderStatus =
   | "delivered"
   | "cancelled"
 
+// Only statuses the backend can store (see api/orders.ts). "contacted"/"printed" remain in the type for legacy data.
 export const ORDER_STATUSES: OrderStatus[] = [
-  "new", "contacted", "confirmed", "paid", "printed", "shipped", "delivered", "cancelled",
+  "new", "confirmed", "paid", "shipped", "delivered", "cancelled",
 ]
 
 export const STATUS_LABELS: Record<OrderStatus, string> = {

@@ -104,17 +104,18 @@ Live online payments still require the setup in PAYMENTS.md. Secret keys remain 
 - The hero changes only the wall colour: four brand presets and a custom colour picker. Poster discovery and product details remain available.
 - Customer login, registration, password reset and password change are at /account.
 - Customer login remains at /account. The footer links to the separate, role-protected /admin login and read-only /admin/preview/dashboard. See ADMIN_SETUP.md to enable live management.
-- The photo gallery labels bundled room images and testimonials as samples. Customers can preview photos locally. Signed-in customers can submit a photo, a rating and a review with explicit public-display consent. New submissions are private until an administrator approves them.
+- The photo gallery labels bundled room images and testimonials as samples. Customers can preview photos locally. Signed-in, email-verified customers can submit a photo, a rating and a review with explicit public-display consent. The Java backend publishes reviews on successful submission; administrators can remove them. The gallery uses the saved photo URL, not the temporary local preview.
 
 To enable these connections:
 
-1. Apply supabase/migrations/20261006010000_customer_reviews.sql after the earlier migrations. It creates ws_reviews and a private review-photos bucket with 5 MB raster MIME limits, owner paths, RLS, column privileges and administrator moderation. The submission trigger allows up to three stored reviews per account in 24 hours. Deleted reviews no longer count; these per-account limits do not replace provider rate limits or upload abuse controls.
-2. Set the public Supabase variables from .env.example, enable email/password Auth and email confirmation, and set the provider's minimum password length to at least 12. Configure CAPTCHA and rate limits for account creation, password reset and storage uploads.
-3. In Supabase Auth URL Configuration, allow the exact deployed /account URL for confirmation and recovery links. Configure email delivery and test both flows in staging. This memory-only client uses the provider's implicit link flow and consumes tokens on /account, removes them from the URL and verifies the user with the provider.
-4. Approve or remove pending reviews through trusted Supabase dashboard/server tooling. Keep moderation privileges separate from customer signup; a customer cannot grant themselves the trusted app_metadata.role = "admin" claim.
-5. Test public versus pending access, owner isolation, signed photo URLs, failed uploads and moderation against the configured backend before accepting real submissions.
+1. Configure `VITE_BACKEND_URL` for the Java API and apply its database migrations, including the `reviews.photo_url`, `photo_object_key` and `city` columns.
+2. Configure R2 or MinIO on the backend. Product and review image files live in object storage; the database stores their URLs, object keys and product relationships.
+3. Configure customer email verification. Review submission requires an authenticated, email-verified account.
+4. Test multipart `POST /api/review`, the public photo/product feeds, and the administrator review list and removal against the configured backend before accepting real submissions.
 
-No live account provider or database was configured during this update. The preview gives accurate unavailable feedback and cannot create accounts or submit reviews until setup is complete. API requests remain in src/api/customerAuth.ts and src/api/reviews.ts.
+Admin artwork uploads are staged in memory until **Save poster**. The editor shows a local preview without treating the staging identifier as a hosted URL. Saving creates or updates the product, uploads the file through `/api/product/image?productId=...`, and reloads the persisted image URL. Failed catalog saves retain selected files for retry; closing the editor discards its local previews. A page reload requires selecting unsaved files again.
+
+Focused image-flow regressions: `VITE_BACKEND_URL=https://api.example pnpm exec vite build --config tests/vite.ui.config.ts && node --test tests/image-flow.test.mjs`. These tests use isolated API stubs, not live database or storage writes.
 
 ## Order sharing and Razorpay
 

@@ -11,15 +11,7 @@ export default function PrivacyPage() {
   return (
     <div className="min-h-screen bg-ground text-ink">
       <AnnouncementBar />
-      <SiteNav
-        cartCount={cartCount}
-        bumped={false}
-        onOpenCart={() => {}}
-        query=""
-        onQueryChange={() => {}}
-        SearchSlot={null}
-        CartSlot={null}
-      />
+      <SiteNav cartCount={cartCount} bumped={false} onOpenCart={() => {}} />
       <main className="mx-auto max-w-[720px] px-4 py-14 sm:px-8 sm:py-20">
         <p className="text-xs uppercase tracking-[.2em] text-magenta">
           Your information

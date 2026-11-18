@@ -1,14 +1,22 @@
 import { useEffect, useState } from "react"
 import { Link, useNavigate, useSearchParams } from "react-router"
 import Logo from "../components/Logo"
+import GoogleSignInButton from "../components/GoogleSignInButton"
+import { loadMyOrders, type MyOrder } from "../api/account"
+import { formatMoney } from "../data/shop"
 import { useCustomerAuth } from "../context/CustomerAuthContext"
 import {
   accountsAvailable,
+  googleClientId,
+  googleLoginOnly,
   signInCustomer,
+  signInCustomerWithGoogle,
   signUpCustomer,
   sendPasswordReset,
   changeCustomerPassword,
   completeAccountRedirect,
+  confirmPasswordReset,
+  pendingResetToken,
 } from "../api/customerAuth"
 export default function AccountPage() {
   const { member, loading, refresh, logout } = useCustomerAuth(),
@@ -24,6 +32,22 @@ export default function AccountPage() {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [message, setMessage] = useState("")
+  const [orders, setOrders] = useState<MyOrder[] | null>(null),
+    [ordersError, setOrdersError] = useState(false)
+  useEffect(() => {
+    if (!member) {
+      setOrders(null)
+      return
+    }
+    let active = true
+    setOrdersError(false)
+    loadMyOrders()
+      .then((rows) => active && setOrders(rows))
+      .catch(() => active && setOrdersError(true))
+    return () => {
+      active = false
+    }
+  }, [member?.id])
   useEffect(() => {
     let active = true
     void completeAccountRedirect()
@@ -46,6 +70,27 @@ export default function AccountPage() {
     setPassword("")
     setShow(false)
   }
+  async function afterSignIn() {
+    await refresh()
+    const destination = params.get("returnTo")
+    if (destination && /^\/(?!\/)/.test(destination) && !destination.startsWith("/account")) navigate(destination)
+    else setMessage("You're signed in. Welcome back!")
+  }
+  async function handleGoogle(credential: string) {
+    if (busy) return
+    setBusy(true)
+    setError("")
+    setMessage("")
+    try {
+      await signInCustomerWithGoogle(credential)
+      await afterSignIn()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Sign-in is unavailable.")
+    } finally {
+      setBusy(false)
+    }
+  }
+  const googleOnly = googleLoginOnly && (mode === "login" || mode === "signup")
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     if (busy) return
@@ -55,10 +100,7 @@ export default function AccountPage() {
     try {
       if (mode === "login") {
         await signInCustomer(email, password)
-        await refresh()
-        const destination = params.get("returnTo")
-        if (destination?.startsWith("/#")) navigate(destination)
-        else setMessage("You're signed in. Welcome back!")
+        await afterSignIn()
       } else if (mode === "signup") {
         const signed = await signUpCustomer(name, email, password)
         setPassword("")
@@ -74,7 +116,9 @@ export default function AccountPage() {
           "If that email has an account, a reset link will arrive shortly.",
         )
       } else {
-        await changeCustomerPassword(password)
+        const token = pendingResetToken()
+        if (token) await confirmPasswordReset(token, password)
+        else await changeCustomerPassword(password)
         setPassword("")
         setMode("login")
         setMessage("Password updated.")
@@ -123,6 +167,44 @@ export default function AccountPage() {
               <Link to="/#catalogue">Discover a print ↗</Link>
               <Link to="/track">Order help ↗</Link>
             </div>
+            <section aria-label="Your orders" className="mt-6">
+              <h2 className="text-lg font-semibold">Your orders</h2>
+              {ordersError ? (
+                <p role="status">We couldn't load your orders right now.</p>
+              ) : orders === null ? (
+                <p role="status">Loading your orders…</p>
+              ) : orders.length === 0 ? (
+                <p>You haven't placed any orders yet.</p>
+              ) : (
+                <ul className="mt-2 grid gap-3">
+                  {orders.map((o) => (
+                    <li key={o.id} className="rounded-xl border p-3 text-sm">
+                      <div className="flex justify-between gap-2">
+                        <strong>#{o.ref}</strong>
+                        <span>{o.status.replaceAll("_", " ")}</span>
+                      </div>
+                      <div>
+                        {new Date(o.placedAt).toLocaleDateString("en-IN")} ·{" "}
+                        {formatMoney(o.total)}
+                      </div>
+                      <ul className="mt-1 opacity-80">
+                        {o.items.map((i, n) => (
+                          <li key={n}>
+                            {i.name}
+                            {i.variant ? ` (${i.variant})` : ""} × {i.qty}
+                          </li>
+                        ))}
+                      </ul>
+                      {o.trackingNumber && (
+                        <div className="mt-1">
+                          Tracking: {o.shippingProvider} {o.trackingNumber}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
             <button
               className="account-primary"
               disabled={busy}
@@ -155,10 +237,12 @@ export default function AccountPage() {
             </h1>
             <p className="account-subtitle">
               {mode === "signup"
-                ? "Make an account to share your photo reviews."
-                : "Sign in to share the story on your wall."}
+                ? "Make an account to save favourites, build your cart and place orders."
+                : params.get("returnTo")
+                  ? "Please sign in to use your wishlist, cart and orders."
+                  : "Sign in to use your wishlist, cart and orders."}
             </p>
-            {(mode === "login" || mode === "signup") && (
+            {(mode === "login" || mode === "signup") && !googleOnly && (
               <div className="account-tabs">
                 <button
                   aria-pressed={mode === "login"}
@@ -182,6 +266,22 @@ export default function AccountPage() {
                 and order in chat.
               </p>
             )}
+            {googleOnly ? (
+              <div className="account-form">
+                {accountsAvailable && googleClientId ? (
+                  <GoogleSignInButton
+                    clientId={googleClientId}
+                    onCredential={(c) => void handleGoogle(c)}
+                    onError={setError}
+                  />
+                ) : (
+                  <p className="account-notice" role="status">
+                    Google sign-in is not configured yet.
+                  </p>
+                )}
+                <small>New here? Your account is created the first time you continue with Google.</small>
+              </div>
+            ) : (
             <form onSubmit={submit} className="account-form">
               <fieldset disabled={busy} className="contents">
               {mode === "signup" && (
@@ -268,6 +368,7 @@ export default function AccountPage() {
               ) : null}
               </fieldset>
             </form>
+            )}
           </>
         )}
         {error && (

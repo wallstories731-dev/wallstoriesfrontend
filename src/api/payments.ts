@@ -6,22 +6,24 @@ import { API_CONFIG } from "./config"
  * Online payments. The UI only calls the functions in this file.
  *
  * - Secret keys never exist in the browser. Order creation and signature
- *   verification run in Supabase Edge Functions (see /supabase/functions).
- * - The server recomputes the price from the published catalog, so the browser
+ *   verification run in the Java backend (/api/payment).
+ * - The server recomputes the price from its own catalog, so the browser
  *   cannot change what gets charged.
  */
 
-export type PaymentMode = "off" | "mock" | "razorpay"
+export type PaymentMode = "off" | "razorpay"
 
 export const PAYMENT_MODE: PaymentMode = API_CONFIG.paymentMode
 export const paymentsEnabled = PAYMENT_MODE !== "off"
-export const isTestMode = PAYMENT_MODE === "mock"
+
+/** productId/variantId are backend UUIDs (Poster.id / Poster.variantIds[size]). */
+export type PaymentItem = { productId: string; variantId?: string; size: string; qty: number }
 
 export type PaymentRequest = {
   ref: string
   /** Total in rupees. Used for display and as a cross-check; the server decides the real amount. */
   amount: number
-  items: { posterId: string; size: string; qty: number }[]
+  items: PaymentItem[]
   customer: {
     name: string
     phone: string
@@ -33,8 +35,10 @@ export type PaymentRequest = {
 }
 
 export type PaymentOrder = {
-  mode: "mock" | "razorpay"
+  mode: "razorpay"
   orderId: string
+  /** Backend order UUID (needed by /api/payment?action=verify). */
+  backendOrderId?: string
   amountPaise: number
   currency: string
   /** Public Razorpay key id (safe in the browser). */
@@ -43,6 +47,7 @@ export type PaymentOrder = {
 
 export type PaymentProof = {
   orderId: string
+  backendOrderId?: string
   paymentId: string
   signature: string
 }
@@ -54,48 +59,51 @@ export class PaymentCancelled extends Error {
   }
 }
 
-async function functionError(error: unknown): Promise<string> {
-  try {
-    const ctx = (error as { context?: Response }).context
-    if (ctx) {
-      const body = await ctx.json()
-      if (body?.error) return String(body.error)
-    }
-  } catch {}
-  return (error as Error)?.message || "Payment service is unavailable. Please try again."
+/**
+ * The backend stores one free-text address and derives the shipping zone from
+ * the 6-digit pincode inside it, so name, city and pincode are folded in here.
+ */
+function formatShippingAddress(c: PaymentRequest["customer"]): string {
+  const address = c.address.trim()
+  const pin = c.pincode.trim()
+  const parts = [c.name.trim(), address, c.city.trim()].filter(Boolean)
+  const line = parts.join(", ")
+  return pin && !address.includes(pin) ? `${line} - ${pin}` : line
+}
+
+/** Replace the server-side cart with the given lines (used for multi-item checkout). */
+async function syncServerCart(items: PaymentItem[]) {
+  const client = getBackendClient()
+  const cleared = await client.request('/api/cart', { method: 'DELETE' })
+  if (!cleared.success) throw new Error(cleared.message || "Could not prepare your cart.")
+  for (const it of items) {
+    const added = await client.request('/api/cart', {
+      method: 'POST',
+      body: JSON.stringify({ productId: it.productId, variantId: it.variantId, quantity: it.qty }),
+    })
+    if (!added.success) throw new Error(added.message || "Could not add an item to your cart.")
+  }
 }
 
 /** Step 1: create a payment order. */
 export async function createPaymentOrder(req: PaymentRequest): Promise<PaymentOrder> {
   if (PAYMENT_MODE === "off") throw new Error("Online payments are not enabled.")
-  if (PAYMENT_MODE === "mock") {
-    return {
-      mode: "mock",
-      orderId: `mock_${req.ref}`,
-      amountPaise: Math.round(req.amount * 100),
-      currency: "INR",
-    }
-  }
-  
   await ensureCheckoutSession()
   const client = getBackendClient()
   
-  // Call backend payment initiation API
+  const single = req.items.length === 1 ? req.items[0] : null
+  if (!single) await syncServerCart(req.items)
   const response = await client.request('/api/payment?action=initiate', {
     method: 'POST',
     body: JSON.stringify({
-      shippingAddress: req.customer.address,
+      shippingAddress: formatShippingAddress(req.customer),
       phone: req.customer.phone,
-      // If there's only one item, send it as buy-now
-      ...(req.items.length === 1 ? {
-        item: {
-          productId: req.items[0].posterId,
-          quantity: req.items[0].qty
-        }
-      } : {})
-    })
+      ...(single
+        ? { item: { productId: single.productId, variantId: single.variantId, quantity: single.qty } }
+        : {}),
+    }),
   })
-  
+
   if (!response.success || !response.data?.razorpayOrderId) {
     throw new Error(response.message || "Could not start the payment. Please try again.")
   }
@@ -112,6 +120,7 @@ export async function createPaymentOrder(req: PaymentRequest): Promise<PaymentOr
   return { 
     mode: "razorpay", 
     orderId: data.razorpayOrderId, 
+    backendOrderId: typeof data.orderId === "string" ? data.orderId : undefined,
     amountPaise: data.amount, 
     currency: data.currency, 
     keyId: data.keyId 
@@ -203,7 +212,7 @@ export async function openRazorpay(
           reject(new Error("Razorpay returned an invalid payment response. Check your payment app before retrying."))
           return
         }
-        resolve({ orderId: r.razorpay_order_id, paymentId: r.razorpay_payment_id!, signature: r.razorpay_signature! })
+        resolve({ orderId: r.razorpay_order_id, backendOrderId: order.backendOrderId, paymentId: r.razorpay_payment_id!, signature: r.razorpay_signature! })
       },
       modal: { ondismiss: () => reject(new PaymentCancelled()) },
     })
@@ -218,16 +227,16 @@ export async function openRazorpay(
 /** Step 3: have the server confirm the payment is genuine. */
 export async function verifyPayment(proof: PaymentProof): Promise<{ ok: boolean }> {
   if (PAYMENT_MODE === "off") throw new Error("Online payments are not enabled.")
-  if (PAYMENT_MODE === "mock") return { ok: proof.orderId.startsWith("mock_") && proof.signature === "mock" }
   
   await ensureCheckoutSession()
+  if (!proof.backendOrderId) throw new Error("Missing order reference. Please try again.")
   const client = getBackendClient()
   
   // Call backend payment verification API
   const response = await client.request('/api/payment?action=verify', {
     method: 'POST',
     body: JSON.stringify({
-      orderId: proof.orderId,
+      orderId: proof.backendOrderId,
       razorpayOrderId: proof.orderId,
       razorpayPaymentId: proof.paymentId,
       razorpaySignature: proof.signature

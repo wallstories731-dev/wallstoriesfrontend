@@ -4,6 +4,7 @@ import { REVIEWS } from "../data/reviews"
 import ArtworkImage from "./ArtworkImage"
 import useModal from "../hooks/useModal"
 import { useCustomerAuth } from "../context/CustomerAuthContext"
+import { useStore } from "../context/StoreContext"
 import { accountsAvailable } from "../api/customerAuth"
 import {
   subscribePhotoReviews,
@@ -74,6 +75,15 @@ function ReviewLightbox({
 }
 export default function PhotoReviews() {
   const { member } = useCustomerAuth()
+  // Reviews live against a product, so we pair every photo-only submission
+  // with a product id. Prefer the hero-featured poster; fall back to the
+  // first non-draft poster in the catalog so the form keeps working even
+  // before an admin picks a hero.
+  const { posters, featuredConfig } = useStore()
+  const targetProductId =
+    posters.find((p) => p.id === featuredConfig.posterId && p.status !== "draft")?.id ??
+    posters.find((p) => p.status !== "draft")?.id ??
+    ""
   const [reviews, setReviews] = useState<PhotoReview[]>(SAMPLES),
     [activeId, setActiveId] = useState<string | null>(null),
     [formOpen, setFormOpen] = useState(false)
@@ -87,7 +97,8 @@ export default function PhotoReviews() {
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
     [sent, setSent] = useState(false),
-    [loadingError, setLoadingError] = useState("")
+    [loadingError, setLoadingError] = useState(""),
+    [toast, setToast] = useState("")
   const url = useRef(""),
     generation = useRef(0)
   const active = reviews.find((review) => review.id === activeId) || null
@@ -105,6 +116,11 @@ export default function PhotoReviews() {
   useEffect(() => {
     if (member) setName(member.name)
   }, [member])
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(""), 3400)
+    return () => clearTimeout(t)
+  }, [toast])
   useEffect(
     () => () => {
       generation.current++
@@ -134,13 +150,21 @@ export default function PhotoReviews() {
     e.preventDefault()
     if (busy) return
     setError("")
+    if (!member) {
+      setToast("Please log in to submit your review.")
+      return
+    }
     if (!file) {
       setError("Choose a photo of your wall.")
       return
     }
     setBusy(true)
     try {
-      await submitPhotoReview({ name, city, rating, text, consent }, file)
+      const saved = await submitPhotoReview({ name, city, rating, text, consent, productId: targetProductId }, file)
+      setReviews((prev) => [
+        saved,
+        ...prev.filter((review) => review.id !== saved.id && !review.sample),
+      ])
       setSent(true)
       setFile(null)
       if (url.current) URL.revokeObjectURL(url.current)
@@ -180,7 +204,7 @@ export default function PhotoReviews() {
       {reviews[0]?.sample && (
         <p className="photo-sample">
           Sample photos and reviews shown for inspiration. Customer submissions
-          appear after approval.
+          appear after successful submission.
         </p>
       )}
       {loadingError && (
@@ -228,7 +252,7 @@ export default function PhotoReviews() {
         {sent ? (
           <div role="status">
             <h3>Thanks for sharing your wall!</h3>
-            <p>Your photo review is awaiting approval.</p>
+            <p>Your photo review has been published.</p>
             <button
               onClick={() => {
                 setSent(false)
@@ -355,7 +379,7 @@ export default function PhotoReviews() {
                 />
                 <span>
                   I own this photo and agree to display it and my review
-                  publicly after approval.
+                  publicly.
                 </span>
               </label>
               {error && (
@@ -366,13 +390,19 @@ export default function PhotoReviews() {
               <button
                 className="account-primary"
                 type="submit"
-                disabled={busy || !member || !accountsAvailable}
+                disabled={busy || !accountsAvailable}
+                onClick={(e) => {
+                  if (!member) {
+                    e.preventDefault()
+                    setToast("Please log in to submit your review.")
+                  }
+                }}
               >
                 {busy ? "Submitting…" : "Submit photo review"}
               </button>
               <p className="photo-sample">
-                Keep personal details out of your photo. Reviews are approved
-                before they appear.
+                Keep personal details out of your photo. Reviews are published
+                after successful submission.
               </p>
               </fieldset>
             </form>
@@ -381,6 +411,14 @@ export default function PhotoReviews() {
       </div>
       {active && (
         <ReviewLightbox review={active} onClose={() => setActiveId(null)} />
+      )}
+      {toast && (
+        <div
+          role="status"
+          className="animate-toast fixed bottom-6 left-1/2 z-[60] max-w-[92vw] rounded-full bg-yellow px-5 py-3 text-[13px] font-medium text-ink shadow-[0_16px_40px_-16px_rgba(8,2,14,0.9)]"
+        >
+          {toast}
+        </div>
       )}
     </section>
   )

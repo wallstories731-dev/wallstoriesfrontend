@@ -56,10 +56,17 @@ ${order.address ? `<p style="font-size:12px;color:#555">${escapeHtml(order.addre
 <p style="margin-top:16px;font-weight:600">Total: ₹${escapeHtml(order.total.toLocaleString("en-IN"))}</p>
 ${order.paymentRef ? `<p style="font-size:12px;color:#555">Payment ref: ${escapeHtml(order.paymentRef)}</p>` : ""}
 ${order.courier ? `<p style="font-size:12px;color:#555">Courier: ${escapeHtml(order.courier)}${order.trackingId ? " · " + escapeHtml(order.trackingId) : ""}</p>` : ""}
-<button id="print-slip" style="margin-top:24px;padding:8px 20px;background:#000;color:#fff;border:none;cursor:pointer;border-radius:6px">Print</button>
 </body></html>`
-  const w = window.open("", "_blank")
-  if (w) { w.opener = null; w.document.write(html); w.document.close(); w.document.getElementById("print-slip")?.addEventListener("click", () => w.print()) }
+  // Print through a hidden srcdoc iframe: no popup, no document.write, no opener to leak.
+  const frame = document.createElement("iframe")
+  frame.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0"
+  frame.srcdoc = html
+  frame.onload = () => {
+    frame.contentWindow?.focus()
+    frame.contentWindow?.print()
+    setTimeout(() => frame.remove(), 1500)
+  }
+  document.body.appendChild(frame)
 }
 
 // ─── Order Detail Panel ───────────────────────────────────────────────────────

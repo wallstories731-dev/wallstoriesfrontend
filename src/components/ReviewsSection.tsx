@@ -76,9 +76,6 @@ export default function ReviewsSection() {
         <div>
           <p className="reviews-kicker">Wall love, on repeat</p>
           <h2 id="reviews-title">A little print. A lot of feeling.</h2>
-          <p className="reviews-preview-label">
-            Preview reviews · sample content
-          </p>
         </div>
         <button
           type="button"
